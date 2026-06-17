@@ -235,7 +235,7 @@ class EPUB_Output(object):
     DEBUG = False
 
     GENERATE_EPUB2_COMPATIBLE = True
-    PLACE_FILES_IN_SUBDIRS = False
+    PLACE_FILES_IN_SUBDIRS = True
 
     OEBPS_DIR = "OEBPS"
 
@@ -256,13 +256,13 @@ class EPUB_Output(object):
         TEXT_FILEPATH = "/xhtml" + TEXT_FILEPATH
         SECTION_TEXT_FILEPATH = "/xhtml" + SECTION_TEXT_FILEPATH
         COVER_FILEPATH = "/xhtml" + COVER_FILEPATH
-        NAV_FILEPATH = "/xhtml" + NAV_FILEPATH
+        NAV_FILEPATH = NAV_FILEPATH
         FONT_FILEPATH = "/fonts" + FONT_FILEPATH
         IMAGE_FILEPATH = "/images" + IMAGE_FILEPATH
         PDF_FILEPATH = "/misc" + PDF_FILEPATH
-        STYLES_CSS_FILEPATH = "/css" + STYLES_CSS_FILEPATH
-        RESET_CSS_FILEPATH = "/css" + RESET_CSS_FILEPATH
-        LAYOUT_CSS_FILEPATH = "/css" + LAYOUT_CSS_FILEPATH
+        STYLES_CSS_FILEPATH = "/Styles" + STYLES_CSS_FILEPATH
+        RESET_CSS_FILEPATH = "/Styles" + RESET_CSS_FILEPATH
+        LAYOUT_CSS_FILEPATH = "/Styles" + LAYOUT_CSS_FILEPATH
 
     def __init__(self, epub2_desired=False, force_cover=False, will_output=True):
         self.epub2_desired = epub2_desired
@@ -414,7 +414,7 @@ class EPUB_Output(object):
     def generate_epub(self):
 
         if self.asin:
-            self.uid = "urn:asin:" + self.asin
+            self.uid = self.asin
         elif self.book_id:
             self.uid = self.book_id
         else:
