@@ -593,7 +593,7 @@ class KFX_EPUB_Content(object):
                         if (meta is None or meta.get("name") != "viewport"):
                             add_meta_name_content(book_part.head(), "viewport", "width=%d, height=%d" % (
                                 int(math.ceil(fixed_width)), int(math.ceil(fixed_height))))
-                            self.link_css_file(book_part, self.RESET_CSS_FILEPATH)
+                            self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
                         else:
                             log.error("Fixed layout html already has viewport when adding")
 
@@ -627,7 +627,7 @@ class KFX_EPUB_Content(object):
                     self.add_svg_wrapper_to_block_image(content_elem, book_part, fixed_height, fixed_width)
 
                     if is_top_level and USE_CSS_RESET_ON_FULL_PAGE_IMAGES:
-                        self.link_css_file(book_part, self.RESET_CSS_FILEPATH)
+                        self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
 
             elif layout == "$324":
 
@@ -675,7 +675,7 @@ class KFX_EPUB_Content(object):
 
                 add_meta_name_content(book_part.head(), "viewport", "width=%d, height=%d" % (fixed_width, fixed_height))
 
-                self.link_css_file(book_part, self.RESET_CSS_FILEPATH)
+                self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
 
             else:
                 log.error("%s has unknown %s layout: %s" % (self.content_context, content_type, layout))

@@ -26,27 +26,34 @@ def sanitize_filename(name):
 
 def batch_convert_kfx_to_epub(input_dir, output_dir):
     """
-    批量掃描輸入目錄中的 KFX/KFX-ZIP，轉換為 EPUB，
+    轉換單一 KFX/KFX-ZIP 檔案或批量掃描目錄中的 KFX/KFX-ZIP，轉換為 EPUB，
     並自動以 '[作者] 書名.epub' 的全型安全格式命名輸出。
     """
     input_path = Path(input_dir).resolve()
     output_path = Path(output_dir).resolve()
 
-    print(f"📂 輸入目錄：{input_path}")
+    print(f"📂 輸入路徑：{input_path}")
     print(f"📂 輸出目錄：{output_path}")
 
     if not input_path.exists():
-        print(f"❌ 錯誤：找不到輸入目錄 '{input_path}'")
+        print(f"❌ 錯誤：找不到輸入路徑 '{input_path}'")
         return
 
     # 建立輸出目錄
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # 搜尋目標檔案
-    kfx_files = list(input_path.glob("*.kfx-zip")) + list(input_path.glob("*.kfx"))
+    # 決定要處理單一檔案還是批次目錄
+    if input_path.is_file():
+        if input_path.suffix.lower() == ".kfx" or input_path.name.lower().endswith(".kfx-zip"):
+            kfx_files = [input_path]
+        else:
+            print("💡 提示：輸入的是檔案，但不是 .kfx 或 .kfx-zip。")
+            return
+    else:
+        kfx_files = list(input_path.glob("*.kfx-zip")) + list(input_path.glob("*.kfx"))
 
     if not kfx_files:
-        print("💡 提示：在輸入目錄中沒有找到任何 .kfx-zip 或 .kfx 檔案。")
+        print("💡 提示：沒有找到任何 .kfx-zip 或 .kfx 檔案。")
         return
 
     print(f"🔍 找到 {len(kfx_files)} 個檔案，開始進行命名轉換...\n")
@@ -107,7 +114,7 @@ if __name__ == "__main__":
     script_dir = Path(__file__).parent.resolve()
     
     parser = argparse.ArgumentParser(
-        description="使用 kfxlib 批量將 KFX / KFX-ZIP 轉換為 '[作者] 書名.epub' 的全型安全指令工具"
+        description="使用 kfxlib 將單一 KFX / KFX-ZIP 或資料夾中的 KFX / KFX-ZIP 轉換為 '[作者] 書名.epub' 的全型安全指令工具"
     )
     
     # 預設目錄更新為您要求的：output_kfx-zip
@@ -115,10 +122,10 @@ if __name__ == "__main__":
         "input_dir", 
         nargs="?", 
         default=str(script_dir / "output_kfx-zip"),
-        help="輸入目錄路徑。預設為腳本同目錄下的 output_kfx-zip"
+        help="輸入目錄或單一 .kfx / .kfx-zip 檔案。預設為腳本同目錄下的 output_kfx-zip"
     )
     
-    # 預設目錄更新為您要求的：output_epub
+    # 預設輸出目錄：output_epub
     parser.add_argument(
         "output_dir", 
         nargs="?", 

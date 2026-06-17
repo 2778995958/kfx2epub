@@ -1036,18 +1036,86 @@ NON_HERITABLE_DEFAULT_PROPERTIES = {
     }
 
 
-RESET_CSS_DATA = (
-    "html {color: #000; background: #FFF;}\n" +
-    "body,div,dl,dt,dd,ul,ol,li,h1,h2,h3,h4,h5,h6,th,td {margin: 0; padding: 0;}\n" +
-    "table {border-collapse: collapse; border-spacing: 0;}\n" +
-    "fieldset,img {border: 0;}\n" +
-    "caption,th,var {font-style: normal; font-weight: normal;}\n" +
-    "li {list-style: none;}\n" +
-    "caption,th {text-align: left;}\n" +
-    "h1,h2,h3,h4,h5,h6 {font-size: 100%; font-weight: normal;}\n" +
-    "sup {vertical-align: text-top;}\n" +
-    "sub {vertical-align: text-bottom;}\n" +
-    "a.app-amzn-magnify {display: block; width: 100%; height: 100%;}\n")
+RESET_CSS_DATA = """@charset "UTF-8";
+body {
+  margin:         0;
+  padding:        0;
+  font-size:      100%;
+  vertical-align: baseline;
+  line-height:    1.75;
+  background:     transparent;
+
+  word-spacing:   normal;
+  letter-spacing: normal;
+  white-space:    normal;
+  word-wrap:      break-word;
+  text-align:     justify;
+
+  -webkit-line-break: normal;
+  -epub-line-break:   normal;
+
+  -webkit-word-break: normal;
+  -epub-word-break:   normal;
+
+  -webkit-hyphens: auto;
+  -epub-hyphens:   auto;
+
+  -webkit-text-underline-position: under left;
+  -epub-text-underline-position:   under left;
+}
+div,p {
+  display: block;
+  width:   auto;
+  height:  auto;
+  margin:  0;
+  padding: 0;
+}
+body,div,p {
+  text-indent: 0;
+}
+body > p,
+div  > p {
+  text-indent: inherit;
+}
+h1,h2,h3,h4,h5,h6 {
+  display:     block;
+  margin:      0;
+  padding:     0;
+  font-size:   100%;
+  font-weight: inherit;
+  background:  transparent;
+}
+img {
+  width:          auto;
+  height:         auto;
+  margin:         0;
+  padding:        0;
+  border:         none;
+  vertical-align: baseline;
+  background:     transparent;
+}
+a {
+  font-style:      inherit;
+  font-weight:     inherit;
+  text-decoration: inherit;
+  color:           inherit;
+  background:      transparent;
+}
+"""
+
+
+FIXED_LAYOUT_CSS_DATA = (
+    "@charset \"UTF-8\";\n\n" +
+    "html,\n" +
+    "body {\n" +
+    "  margin:    0;\n" +
+    "  padding:   0;\n" +
+    "  font-size: 0;\n" +
+    "}\n" +
+    "svg {\n" +
+    "  margin:    0;\n" +
+    "  padding:   0;\n" +
+    "}\n")
 
 
 AMAZON_SPECIAL_CLASSES = [
@@ -2247,12 +2315,21 @@ class KFX_EPUB_Properties(object):
             self.set_style(elem, new_style)
 
     def create_css_files(self):
-        for css_file in sorted(list(self.css_files)):
-            if css_file == self.RESET_CSS_FILEPATH:
-                self.manifest_resource(self.RESET_CSS_FILEPATH, data=RESET_CSS_DATA.encode("utf-8"), mimetype="text/css")
+        linked_css_files = set()
+
+        for book_part in self.book_parts:
+            for link in book_part.head().findall("link"):
+                if link.get("rel") == "stylesheet" and "href" in link.attrib:
+                    linked_css_files.add(get_url_filename(urlabspath(link.get("href"), ref_from=book_part.filename)))
+
+        for css_file in sorted(linked_css_files):
+            if css_file == self.FIXED_LAYOUT_CSS_FILEPATH:
+                self.manifest_resource(self.FIXED_LAYOUT_CSS_FILEPATH, data=FIXED_LAYOUT_CSS_DATA.encode("utf-8"), mimetype="text/css")
 
             elif css_file == self.STYLES_CSS_FILEPATH:
-                css_lines = ["@charset \"UTF-8\";"]
+                self.manifest_resource(self.RESET_CSS_FILEPATH, data=RESET_CSS_DATA.encode("utf-8"), mimetype="text/css")
+
+                css_lines = ["@charset \"UTF-8\";", "@import \"reset.css\";"]
 
                 if self.font_faces:
                     css_lines.extend(["@font-face {%s}" % ff.tostring() for ff in sorted(self.font_faces)])

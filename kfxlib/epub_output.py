@@ -234,7 +234,7 @@ class OutputFile(object):
 class EPUB_Output(object):
     DEBUG = False
 
-    GENERATE_EPUB2_COMPATIBLE = True
+    GENERATE_EPUB2_COMPATIBLE = False
     PLACE_FILES_IN_SUBDIRS = True
 
     OEBPS_DIR = "OEBPS"
@@ -250,6 +250,7 @@ class EPUB_Output(object):
     PDF_FILEPATH = "/%s"
     STYLES_CSS_FILEPATH = "/stylesheet.css"
     RESET_CSS_FILEPATH = "/reset.css"
+    FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout.css"
     LAYOUT_CSS_FILEPATH = "/layout%04d.css"
 
     if PLACE_FILES_IN_SUBDIRS:
@@ -262,6 +263,7 @@ class EPUB_Output(object):
         PDF_FILEPATH = "/misc" + PDF_FILEPATH
         STYLES_CSS_FILEPATH = "/Styles" + STYLES_CSS_FILEPATH
         RESET_CSS_FILEPATH = "/Styles" + RESET_CSS_FILEPATH
+        FIXED_LAYOUT_CSS_FILEPATH = "/Styles" + FIXED_LAYOUT_CSS_FILEPATH
         LAYOUT_CSS_FILEPATH = "/Styles" + LAYOUT_CSS_FILEPATH
 
     def __init__(self, epub2_desired=False, force_cover=False, will_output=True):
@@ -525,11 +527,30 @@ class EPUB_Output(object):
         return book_part
 
     def link_css_file(self, book_part, css_file, css_type="text/css"):
+        head = book_part.head()
+        href = urlrelpath(css_file, ref_from=book_part.filename)
+
+        if css_file == self.STYLES_CSS_FILEPATH:
+            fixed_layout_href = urlrelpath(self.FIXED_LAYOUT_CSS_FILEPATH, ref_from=book_part.filename)
+            for link in head.findall("link"):
+                if link.get("rel") == "stylesheet" and link.get("href") == fixed_layout_href:
+                    return
+
+        elif css_file == self.FIXED_LAYOUT_CSS_FILEPATH:
+            styles_href = urlrelpath(self.STYLES_CSS_FILEPATH, ref_from=book_part.filename)
+            for link in list(head.findall("link")):
+                if link.get("rel") == "stylesheet" and link.get("href") == styles_href:
+                    head.remove(link)
+
+        for link in head.findall("link"):
+            if link.get("rel") == "stylesheet" and link.get("href") == href:
+                return
+
         self.css_files.add(css_file)
-        link = etree.SubElement(book_part.head(), "link")
+        link = etree.SubElement(head, "link")
         link.set("rel", "stylesheet")
         link.set("type", css_type)
-        link.set("href", urlrelpath(css_file, ref_from=book_part.filename))
+        link.set("href", href)
 
     def identify_cover(self):
         if self.book_parts:
@@ -734,7 +755,7 @@ class EPUB_Output(object):
                 html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=True)
 
                 if not self.generate_epub2:
-                    html_str = html_str.replace(doctype + b"\n", b"")
+                    html_str = html_str.replace(doctype + b"\n", b"<!DOCTYPE html>\n")
 
                 self.manifest_resource(
                     book_part.filename, book_part.opf_properties, book_part.linear, idref=book_part.idref,

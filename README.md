@@ -1,0 +1,115 @@
+# kfx2epub
+
+將 Kindle 的 `KFX` / `KFX-ZIP` 轉換為 `EPUB` 的工具。
+
+## 目前版本功能
+
+- 修正 EPUB3 XHTML 輸出，保留簡化的 `<!DOCTYPE html>`
+- 加入預設 `reset.css`，由 `stylesheet.css` 透過 `@import "reset.css";` 載入，集中管理一般文字排版基礎樣式
+- 固定版式頁面改用獨立的 `fixed-layout.css`，和一般文字頁樣式分開
+- 避免 fixed-layout 頁面同時連結多餘的 `stylesheet.css`
+- 只產生實際被 XHTML 連結的 CSS 檔案，減少孤兒 CSS
+- 支援資料夾批次轉換 `*.kfx` 與 `*.kfx-zip`
+- 支援單一 `.kfx` / `.kfx-zip` 檔案轉換
+- 支援將單一檔案或整個資料夾拖曳到 `convert_books.py` 上執行
+- 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_books.py` 同目錄下的 `output_epub`
+- 自動以 `[作者] 書名.epub` 格式命名輸出
+- 自動將檔名中的非法字元轉為全型安全字元
+
+## 功能
+
+- 可批次掃描資料夾中的 `*.kfx` 與 `*.kfx-zip`
+- 可直接處理單一 `*.kfx` / `*.kfx-zip` 檔案
+- 可拖曳單一檔案或整個資料夾到 `convert_books.py` 執行
+- 轉換為 EPUB
+- 以 `[作者] 書名.epub` 的格式自動命名輸出
+- 會自動處理檔名中的非法字元
+
+## 使用方法
+
+### 執行方式
+
+```bash
+python convert_books.py [input_dir_or_file] [output_dir]
+```
+
+### 參數
+
+- `input_dir_or_file`
+  - 輸入資料夾，或單一 `.kfx` / `.kfx-zip` 檔案
+  - 預設為腳本同目錄下的 `output_kfx-zip`
+- `output_dir`
+  - 輸出目錄
+  - 預設為腳本同目錄下的 `output_epub`
+
+### 範例
+
+#### 1. 使用預設目錄
+
+```bash
+python convert_books.py
+```
+
+預設會讀取：
+
+- `./output_kfx-zip`
+
+輸出到：
+
+- `./output_epub`
+
+#### 2. 處理單一檔案或資料夾
+
+```bash
+python convert_books.py D:/books/sample.kfx-zip
+```
+
+或直接把單一 `.kfx` / `.kfx-zip` 檔案、或整個資料夾拖曳到 `convert_books.py` 上執行。
+
+這時候輸出仍會寫到 `convert_books.py` 同目錄下的 `output_epub`。
+
+#### 3. 指定輸入與輸出目錄
+
+```bash
+python convert_books.py D:/books/kfx D:/books/epub
+```
+
+## 輸入檔案
+
+工具會處理以下檔案：
+
+- `*.kfx-zip`
+- `*.kfx`
+
+## 輸出結果
+
+輸出的檔名格式如下：
+
+```text
+[作者] 書名.epub
+```
+
+例如：
+
+```text
+[山田太郎] 範例書名.epub
+```
+
+## 注意事項
+
+- 輸入資料夾應只放要轉換的 KFX 檔案。
+- 為避免轉錯檔、輸入來源不乾淨或轉換結果不如預期，建議保留原始 `.kfx` / `.kfx-zip` 檔案，方便重新轉換。
+- 若遇到重複 fragment 或容器異常，通常是KFX打包了2份azw檔，建議重新取得原始檔案。
+
+## 專案結構
+
+- `convert_books.py`：主程式入口
+- `kfxlib/`：KFX 解析與 EPUB 產生核心
+
+## 致謝
+
+本工具基於 KFX Input / kfxlib 相關成果整理與使用，感謝作者 jhowell 的開發與維護。
+
+相關討論區：
+
+- [MobileRead: KFX Input plugin](https://www.mobileread.com/forums/showthread.php?t=291290)
