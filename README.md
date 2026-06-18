@@ -23,7 +23,7 @@
 - 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_kfx2epub.py` 同目錄下的 `output_epub`
 - 自動以 `[作者] 書名.epub` 格式命名輸出
 - 自動將檔名中的非法字元轉為全型安全字元
-- EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-0001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-0000.ext`、`image/p-0000.ext`
+- EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-000.ext`、`image/p-000.ext`
 
 ## 功能
 
@@ -120,9 +120,10 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 
 - 封面頁依 EPUB3 `navigation-documents.xhtml` landmarks 中的 `epub:type="cover"` 判斷，命名為 `item/xhtml/p-cover.xhtml`。
 - 書內目錄頁依 EPUB3 `navigation-documents.xhtml` landmarks 中的 `epub:type="toc"` 判斷，命名為 `item/xhtml/p-toc.xhtml`。
-- 若 spine 中能判斷出 `p-toc.xhtml`，則 cover 與 toc 中間的 XHTML 依 spine 順序命名為 `item/xhtml/p-fmatter-0001.xhtml` 起。
-- `p-toc.xhtml` 之後的一般內容頁依 spine 順序命名為 `item/xhtml/p-0001.xhtml` 起。
-- 若沒有 toc，則一般內容頁依 spine 順序使用 `item/xhtml/p-0001.xhtml` 起的 `p-` 序列。
+- 若 spine 中能判斷出 `p-toc.xhtml`，則 cover 與 toc 中間的 XHTML 依 spine 順序命名為 `item/xhtml/p-fmatter-001.xhtml` 起。
+- `p-toc.xhtml` 之後的一般內容頁依 spine 順序命名為 `item/xhtml/p-001.xhtml` 起。
+- 若沒有 toc，則一般內容頁依 spine 順序使用 `item/xhtml/p-001.xhtml` 起的 `p-` 序列。
+- XHTML 序號至少使用 3 位數；若數量超過 999，會自動擴展為 4 位、5 位等。
 - 若 EPUB3 toc nav 中有標題文字為 `奥付` 的項目，該目標 XHTML 會命名為 `item/xhtml/p-colophon.xhtml`。
 - `epub:type="bodymatter"` / Beginning 不作為封面或目錄判斷依據，避免和封面同頁時誤判。
 
@@ -130,8 +131,9 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 
 - 圖片目錄使用 `item/image/`。
 - 封面圖片使用 `item/image/cover.ext`。
-- 插圖型圖片使用 `item/image/i-0000.ext` 起依序命名。
-- 其他一般圖片使用 `item/image/p-0000.ext` 起依序命名。
+- 插圖型圖片使用 `item/image/i-000.ext` 起依序命名。
+- 其他一般圖片使用 `item/image/p-000.ext` 起依序命名。
+- 圖片序號至少使用 3 位數；若同類圖片數量超過 999，會自動擴展為 4 位、5 位等。
 - `ext` 代表保留實際圖片副檔名，例如 `.jpg`、`.png`、`.webp`。
 
 插圖型圖片會依最終 XHTML DOM 判斷：若圖片位於類似 `body > div > (如有) svg > img/image` 的結構中，會歸類為插圖圖片並使用 `i-` 序列；其他圖片則使用 `p-` 序列。

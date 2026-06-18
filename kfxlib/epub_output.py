@@ -241,8 +241,8 @@ class EPUB_Output(object):
 
     OPF_FILEPATH = "/standard.opf"
     NCX_FILEPATH = "/toc.ncx"
-    TEXT_FILEPATH = "/p-%04d.xhtml"
-    FRONTMATTER_TEXT_FILEPATH = "/p-fmatter-%04d.xhtml"
+    TEXT_FILEPATH = "/p-%s.xhtml"
+    FRONTMATTER_TEXT_FILEPATH = "/p-fmatter-%s.xhtml"
     SECTION_TEXT_FILEPATH = "/%s.xhtml"
     COVER_FILEPATH = "/p-cover.xhtml"
     TOC_FILEPATH = "/p-toc.xhtml"
@@ -516,7 +516,7 @@ class EPUB_Output(object):
         part_index = len(self.book_parts)
 
         if filename is None:
-            filename = self.TEXT_FILEPATH % part_index
+            filename = self.TEXT_FILEPATH % self.sequence_number(part_index)
 
         while self.is_book_part_filename(filename):
             log.error("BookPart filename %s is not unique" % filename)
@@ -536,6 +536,10 @@ class EPUB_Output(object):
             log.debug("new_book_part %s" % filename)
 
         return book_part
+
+    def sequence_number(self, index, total=None, minimum_digits=3):
+        width = max(minimum_digits, len(str(total if total is not None else index)))
+        return ("%%0%dd" % width) % index
 
     def rename_landmark_book_parts(self):
         landmark_targets = []
@@ -594,10 +598,8 @@ class EPUB_Output(object):
 
         toc_in_spine = any(bp.filename == self.TOC_FILEPATH for bp in spine_parts)
         special_filenames = {self.COVER_FILEPATH, self.TOC_FILEPATH, self.COLOPHON_FILEPATH}
-        rename_map = {}
-
-        frontmatter_index = 1
-        content_index = 1
+        frontmatter_parts = []
+        content_parts = []
         before_toc = toc_in_spine
 
         for book_part in spine_parts:
@@ -609,12 +611,18 @@ class EPUB_Output(object):
                 continue
 
             if before_toc:
-                new_filename = self.FRONTMATTER_TEXT_FILEPATH % frontmatter_index
-                frontmatter_index += 1
+                frontmatter_parts.append(book_part)
             else:
-                new_filename = self.TEXT_FILEPATH % content_index
-                content_index += 1
+                content_parts.append(book_part)
 
+        rename_map = {}
+        for index, book_part in enumerate(frontmatter_parts, start=1):
+            new_filename = self.FRONTMATTER_TEXT_FILEPATH % self.sequence_number(index, total=len(frontmatter_parts))
+            if book_part.filename != new_filename:
+                rename_map[book_part.filename] = new_filename
+
+        for index, book_part in enumerate(content_parts, start=1):
+            new_filename = self.TEXT_FILEPATH % self.sequence_number(index, total=len(content_parts))
             if book_part.filename != new_filename:
                 rename_map[book_part.filename] = new_filename
 
@@ -740,6 +748,27 @@ class EPUB_Output(object):
                 for attr in ["href", "src", XLINK_HREF]:
                     if attr in elem.attrib:
                         elem.set(attr, replace_url(elem.get(attr), book_part.filename))
+
+    def prepare_dom_image_sequence_widths(self):
+        seen_filenames = set()
+        role_counts = collections.defaultdict(int)
+
+        for book_part in self.book_parts:
+            for elem in book_part.body().iter("*"):
+                attr = self.image_reference_attr(elem)
+                if attr is None:
+                    continue
+
+                filename = get_url_filename(urlabspath(elem.get(attr), ref_from=book_part.filename))
+                filename = remove_url_fragment(filename or "")
+                if not filename or filename in seen_filenames or self.is_cover_image_filename(filename):
+                    continue
+
+                seen_filenames.add(filename)
+                role_counts["illustration" if self.is_illustration_image(elem) else "page"] += 1
+
+        self.illustration_image_sequence_width = max(3, len(str(role_counts["illustration"] or 0)))
+        self.page_image_sequence_width = max(3, len(str(role_counts["page"] or 0)))
 
     def prepare_dom_image_filenames(self, book_part):
         for elem in book_part.body().iter("*"):
@@ -1038,6 +1067,10 @@ class EPUB_Output(object):
             if BEAUTIFY_HTML:
                 self.beautify_html(book_part)
 
+        self.prepare_dom_image_sequence_widths()
+
+        for book_part in self.book_parts:
+            body = book_part.body()
             self.prepare_dom_image_filenames(book_part)
 
             if body.find(".//%s" % SVG) is not None:

@@ -33,6 +33,8 @@ class KFX_EPUB_Resources(object):
         self.reported_pdf_errors = set()
         self.illustration_image_index = 0
         self.page_image_index = 0
+        self.illustration_image_sequence_width = 3
+        self.page_image_sequence_width = 3
 
     def get_external_resource(self, resource_name, ignore_variants=False):
         resource_obj = self.resource_cache.get(resource_name)
@@ -245,16 +247,18 @@ class KFX_EPUB_Resources(object):
         if image_role == "illustration":
             prefix = "i"
             index_attr = "illustration_image_index"
+            width_attr = "illustration_image_sequence_width"
         elif image_role == "page":
             prefix = "p"
             index_attr = "page_image_index"
+            width_attr = "page_image_sequence_width"
         else:
             raise Exception("Unexpected image role: %s" % image_role)
 
         while True:
             index = getattr(self, index_attr)
             setattr(self, index_attr, index + 1)
-            filename = self.IMAGE_FILEPATH % ("%s-%04d%s" % (prefix, index, extension))
+            filename = self.IMAGE_FILEPATH % ("%s-%s%s" % (prefix, self.sequence_number(index, minimum_digits=getattr(self, width_attr)), extension))
             if filename not in self.oebps_files and filename not in self.manifest_files:
                 return filename
 

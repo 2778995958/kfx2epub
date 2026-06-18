@@ -23,7 +23,7 @@ This tool is currently intended and tested only for Japanese Kindle books. KFX b
 - When using drag-and-drop, output is still written to the `output_epub` folder next to `convert_kfx2epub.py`.
 - Automatically names output files in the `[Author] Book Title.epub` format.
 - Automatically converts illegal filename characters into full-width safe characters.
-- Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-0001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-0000.ext`, and `image/p-0000.ext`.
+- Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-000.ext`, and `image/p-000.ext`.
 
 ## Features
 
@@ -120,9 +120,10 @@ The converted EPUB tries to use regular, readable internal filenames instead of 
 
 - The cover page is detected from `epub:type="cover"` in the EPUB3 `navigation-documents.xhtml` landmarks and named `item/xhtml/p-cover.xhtml`.
 - The in-book table of contents page is detected from `epub:type="toc"` in the EPUB3 `navigation-documents.xhtml` landmarks and named `item/xhtml/p-toc.xhtml`.
-- If `p-toc.xhtml` can be identified in the spine, XHTML files between cover and toc are named sequentially from `item/xhtml/p-fmatter-0001.xhtml` according to spine order.
-- Normal content pages after `p-toc.xhtml` are named sequentially from `item/xhtml/p-0001.xhtml` according to spine order.
-- If there is no toc, normal content pages use the `p-` sequence from `item/xhtml/p-0001.xhtml` according to spine order.
+- If `p-toc.xhtml` can be identified in the spine, XHTML files between cover and toc are named sequentially from `item/xhtml/p-fmatter-001.xhtml` according to spine order.
+- Normal content pages after `p-toc.xhtml` are named sequentially from `item/xhtml/p-001.xhtml` according to spine order.
+- If there is no toc, normal content pages use the `p-` sequence from `item/xhtml/p-001.xhtml` according to spine order.
+- XHTML sequence numbers use at least 3 digits. If the count exceeds 999, the width expands automatically to 4 digits, 5 digits, and so on.
 - If an EPUB3 toc nav item has the title text `奥付`, its target XHTML is named `item/xhtml/p-colophon.xhtml`.
 - `epub:type="bodymatter"` / Beginning is not used to identify the cover or table of contents, to avoid false detection when it points to the same page as the cover.
 
@@ -130,8 +131,9 @@ The converted EPUB tries to use regular, readable internal filenames instead of 
 
 - The image folder is `item/image/`.
 - The cover image uses `item/image/cover.ext`.
-- Illustration-style images are named sequentially from `item/image/i-0000.ext`.
-- Other normal images are named sequentially from `item/image/p-0000.ext`.
+- Illustration-style images are named sequentially from `item/image/i-000.ext`.
+- Other normal images are named sequentially from `item/image/p-000.ext`.
+- Image sequence numbers use at least 3 digits. If the number of images in the same type exceeds 999, the width expands automatically to 4 digits, 5 digits, and so on.
 - `ext` means the actual image extension is preserved, such as `.jpg`, `.png`, or `.webp`.
 
 Illustration-style images are detected from the final XHTML DOM. If an image is in a structure similar to `body > div > (optional) svg > img/image`, it is treated as an illustration image and uses the `i-` sequence. Other images use the `p-` sequence.
