@@ -359,6 +359,11 @@ class EPUB_Output(object):
         else:
             log.error("Unexpected PrimaryWritingMode: %s" % primary_writing_mode)
 
+    def manifest_id_for_filename(self, filename):
+        basename = filename.rpartition("/")[2]
+        basename = posixpath.splitext(basename)[0] or basename
+        return self.fix_html_id(basename[:64])
+
     def manifest_resource(self, filename, opf_properties=None, linear=None, external=False,
                           data=None, mimetype=None, height=None, width=None, idref=None,
                           report_dupe=True):
@@ -368,7 +373,7 @@ class EPUB_Output(object):
 
             return
 
-        idref = self.fix_html_id(idref or filename.rpartition("/")[2][:64])
+        idref = self.fix_html_id(idref) if idref else self.manifest_id_for_filename(filename)
         idref = make_unique_name(idref, self.manifest_ids, sep="_")
 
         manifest_entry = ManifestEntry(filename, opf_properties or set(), linear, external, id=idref)
@@ -849,7 +854,7 @@ class EPUB_Output(object):
 
     def update_manifest_entry_id(self, manifest_entry, filename):
         old_id = manifest_entry.id
-        new_id = self.fix_html_id(filename.rpartition("/")[2][:64])
+        new_id = self.manifest_id_for_filename(filename)
 
         if old_id in self.manifest_ids:
             self.manifest_ids.remove(old_id)
