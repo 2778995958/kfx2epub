@@ -2329,7 +2329,7 @@ class KFX_EPUB_Properties(object):
             elif css_file == self.STYLES_CSS_FILEPATH:
                 self.manifest_resource(self.RESET_CSS_FILEPATH, data=RESET_CSS_DATA.encode("utf-8"), mimetype="text/css")
 
-                css_lines = ["@charset \"UTF-8\";", "@import \"reset.css\";"]
+                css_lines = ["@charset \"UTF-8\";", "@import \"style-reset.css\";"]
 
                 if self.font_faces:
                     css_lines.extend(["@font-face {%s}" % ff.tostring() for ff in sorted(self.font_faces)])

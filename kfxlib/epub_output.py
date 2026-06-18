@@ -237,36 +237,40 @@ class EPUB_Output(object):
     GENERATE_EPUB2_COMPATIBLE = False
     PLACE_FILES_IN_SUBDIRS = True
 
-    OEBPS_DIR = "OEBPS"
+    OEBPS_DIR = "item"
 
-    OPF_FILEPATH = "/content.opf"
+    OPF_FILEPATH = "/standard.opf"
     NCX_FILEPATH = "/toc.ncx"
     TEXT_FILEPATH = "/p-%04d.xhtml"
+    FRONTMATTER_TEXT_FILEPATH = "/p-fmatter-%04d.xhtml"
     SECTION_TEXT_FILEPATH = "/%s.xhtml"
-    COVER_FILEPATH = "/cover.xhtml"
-    TOC_FILEPATH = "/toc.xhtml"
-    NAV_FILEPATH = "/nav%s.xhtml"
+    COVER_FILEPATH = "/p-cover.xhtml"
+    TOC_FILEPATH = "/p-toc.xhtml"
+    COLOPHON_FILEPATH = "/p-colophon.xhtml"
+    NAV_FILEPATH = "/navigation-documents%s.xhtml"
     FONT_FILEPATH = "/%s"
     IMAGE_FILEPATH = "/%s"
     PDF_FILEPATH = "/%s"
-    STYLES_CSS_FILEPATH = "/stylesheet.css"
-    RESET_CSS_FILEPATH = "/reset.css"
-    FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout.css"
+    STYLES_CSS_FILEPATH = "/book-style.css"
+    RESET_CSS_FILEPATH = "/style-reset.css"
+    FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout-jp.css"
     LAYOUT_CSS_FILEPATH = "/layout%04d.css"
 
     if PLACE_FILES_IN_SUBDIRS:
         TEXT_FILEPATH = "/xhtml" + TEXT_FILEPATH
+        FRONTMATTER_TEXT_FILEPATH = "/xhtml" + FRONTMATTER_TEXT_FILEPATH
         SECTION_TEXT_FILEPATH = "/xhtml" + SECTION_TEXT_FILEPATH
         COVER_FILEPATH = "/xhtml" + COVER_FILEPATH
         TOC_FILEPATH = "/xhtml" + TOC_FILEPATH
+        COLOPHON_FILEPATH = "/xhtml" + COLOPHON_FILEPATH
         NAV_FILEPATH = NAV_FILEPATH
         FONT_FILEPATH = "/fonts" + FONT_FILEPATH
-        IMAGE_FILEPATH = "/images" + IMAGE_FILEPATH
+        IMAGE_FILEPATH = "/image" + IMAGE_FILEPATH
         PDF_FILEPATH = "/misc" + PDF_FILEPATH
-        STYLES_CSS_FILEPATH = "/Styles" + STYLES_CSS_FILEPATH
-        RESET_CSS_FILEPATH = "/Styles" + RESET_CSS_FILEPATH
-        FIXED_LAYOUT_CSS_FILEPATH = "/Styles" + FIXED_LAYOUT_CSS_FILEPATH
-        LAYOUT_CSS_FILEPATH = "/Styles" + LAYOUT_CSS_FILEPATH
+        STYLES_CSS_FILEPATH = "/style" + STYLES_CSS_FILEPATH
+        RESET_CSS_FILEPATH = "/style" + RESET_CSS_FILEPATH
+        FIXED_LAYOUT_CSS_FILEPATH = "/style" + FIXED_LAYOUT_CSS_FILEPATH
+        LAYOUT_CSS_FILEPATH = "/style" + LAYOUT_CSS_FILEPATH
 
     def __init__(self, epub2_desired=False, force_cover=False, will_output=True):
         self.epub2_desired = epub2_desired
@@ -476,6 +480,8 @@ class EPUB_Output(object):
                 self.create_epub3_nav()
 
             self.rename_landmark_book_parts()
+            self.rename_colophon_book_part()
+            self.rename_spine_book_parts()
 
         if self.fixed_layout and (self.original_height is None or self.original_width is None) and (self.is_comic or self.is_children):
             self.compare_fixed_layout_viewports()
@@ -562,6 +568,98 @@ class EPUB_Output(object):
 
             if self.rename_book_part_file(target_filename, new_filename):
                 renamed[target_filename] = new_filename
+
+    def rename_colophon_book_part(self):
+        for nav_part in self.book_parts:
+            if not nav_part.is_nav:
+                continue
+
+            for nav in nav_part.body().findall("nav"):
+                if nav.get(EPUB_TYPE) != "toc":
+                    continue
+
+                for a in nav.iter("a"):
+                    if "".join(a.itertext()).strip() != "奥付":
+                        continue
+
+                    target_filename = self.landmark_target_filename(a.get("href"), nav_part.filename)
+                    if target_filename and target_filename not in {self.COVER_FILEPATH, self.TOC_FILEPATH}:
+                        self.rename_book_part_file(target_filename, self.COLOPHON_FILEPATH)
+                    return
+
+    def rename_spine_book_parts(self):
+        spine_parts = [bp for bp in self.book_parts if bp.linear is not None and bp.filename.endswith(".xhtml")]
+        if not spine_parts:
+            return
+
+        toc_in_spine = any(bp.filename == self.TOC_FILEPATH for bp in spine_parts)
+        special_filenames = {self.COVER_FILEPATH, self.TOC_FILEPATH, self.COLOPHON_FILEPATH}
+        rename_map = {}
+
+        frontmatter_index = 1
+        content_index = 1
+        before_toc = toc_in_spine
+
+        for book_part in spine_parts:
+            if book_part.filename == self.TOC_FILEPATH:
+                before_toc = False
+                continue
+
+            if book_part.filename in special_filenames:
+                continue
+
+            if before_toc:
+                new_filename = self.FRONTMATTER_TEXT_FILEPATH % frontmatter_index
+                frontmatter_index += 1
+            else:
+                new_filename = self.TEXT_FILEPATH % content_index
+                content_index += 1
+
+            if book_part.filename != new_filename:
+                rename_map[book_part.filename] = new_filename
+
+        self.rename_book_part_files(rename_map)
+
+    def rename_book_part_files(self, rename_map):
+        if not rename_map:
+            return
+
+        book_part_by_filename = dict((bp.filename, bp) for bp in self.book_parts)
+        filtered_map = {}
+        new_filenames = set()
+
+        for old_filename, new_filename in rename_map.items():
+            if old_filename not in book_part_by_filename or old_filename == new_filename:
+                continue
+
+            if new_filename in new_filenames:
+                log.warning("Cannot rename %s to duplicate book part filename %s" % (old_filename, new_filename))
+                continue
+
+            if new_filename in book_part_by_filename and new_filename not in rename_map:
+                log.warning("Cannot rename %s to existing book part filename %s" % (old_filename, new_filename))
+                continue
+
+            filtered_map[old_filename] = new_filename
+            new_filenames.add(new_filename)
+
+        temp_map = {}
+        temp_filenames = set()
+        for index, old_filename in enumerate(filtered_map):
+            temp_filename = self.SECTION_TEXT_FILEPATH % ("p-rename-tmp-%04d" % index)
+            while temp_filename in book_part_by_filename or temp_filename in new_filenames or temp_filename in temp_filenames:
+                index += 1
+                temp_filename = self.SECTION_TEXT_FILEPATH % ("p-rename-tmp-%04d" % index)
+
+            temp_map[old_filename] = temp_filename
+            temp_filenames.add(temp_filename)
+            book_part_by_filename[old_filename].filename = temp_filename
+            self.update_book_part_references(old_filename, temp_filename)
+
+        for old_filename, new_filename in filtered_map.items():
+            temp_filename = temp_map[old_filename]
+            book_part_by_filename[old_filename].filename = new_filename
+            self.update_book_part_references(temp_filename, new_filename)
 
     def landmark_target_filename(self, href, ref_from):
         if not href:
@@ -706,6 +804,7 @@ class EPUB_Output(object):
         manifest_entry = self.manifest_files.pop(old_filename, None)
         if manifest_entry is not None:
             manifest_entry.filename = new_filename
+            self.update_manifest_entry_id(manifest_entry, new_filename)
             self.manifest_files[new_filename] = manifest_entry
 
         if html_by_filename is None:
@@ -718,6 +817,16 @@ class EPUB_Output(object):
                         elem.set(attr, self.replace_resource_url(elem.get(attr), filename, old_filename, new_filename))
 
         return new_filename
+
+    def update_manifest_entry_id(self, manifest_entry, filename):
+        old_id = manifest_entry.id
+        new_id = self.fix_html_id(filename.rpartition("/")[2][:64])
+
+        if old_id in self.manifest_ids:
+            self.manifest_ids.remove(old_id)
+
+        manifest_entry.id = make_unique_name(new_id, self.manifest_ids, sep="_")
+        self.manifest_ids.add(manifest_entry.id)
 
     def replace_resource_url(self, url, ref_from, old_filename, new_filename):
         abs_url = urlabspath(url, ref_from=ref_from)
@@ -1091,11 +1200,11 @@ class EPUB_Output(object):
             "opf": ALT_OPF_NS_URI,
         }
         package = etree.Element(qname(OPF_NS_URI, "package"), nsmap=OPF_NAMESPACES, attrib={
-            "version": ("2.0" if self.generate_epub2 else "3.0"), "unique-identifier": "bookid"})
+            "version": ("2.0" if self.generate_epub2 else "3.0"), "unique-identifier": "ASIN"})
 
         metadata = etree.SubElement(package, "metadata")
 
-        identifier = etree.SubElement(metadata, qname(DC_NS_URI, "identifier"), attrib={"id": "bookid"})
+        identifier = etree.SubElement(metadata, qname(DC_NS_URI, "identifier"), attrib={"id": "ASIN"})
         identifier.text = self.uid
 
         if self.uid.startswith("urn:uuid:") and self.generate_epub2:
