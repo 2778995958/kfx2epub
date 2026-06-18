@@ -17,8 +17,8 @@ except ImportError:
     tweaks = {}
 
 from .message_logging import log
-from .resources import (EPUB2_ALT_MIMETYPES, MIMETYPE_OF_EXT)
-from .utilities import (make_unique_name, urlrelpath)
+from .resources import (EPUB2_ALT_MIMETYPES, MIMETYPE_OF_EXT, RESOURCE_TYPE_OF_EXT)
+from .utilities import (get_url_filename, make_unique_name, urlabspath, urlrelpath)
 
 
 __license__ = "GPL v3"
@@ -241,9 +241,10 @@ class EPUB_Output(object):
 
     OPF_FILEPATH = "/content.opf"
     NCX_FILEPATH = "/toc.ncx"
-    TEXT_FILEPATH = "/part%04d.xhtml"
+    TEXT_FILEPATH = "/p-%04d.xhtml"
     SECTION_TEXT_FILEPATH = "/%s.xhtml"
     COVER_FILEPATH = "/cover.xhtml"
+    TOC_FILEPATH = "/toc.xhtml"
     NAV_FILEPATH = "/nav%s.xhtml"
     FONT_FILEPATH = "/%s"
     IMAGE_FILEPATH = "/%s"
@@ -257,6 +258,7 @@ class EPUB_Output(object):
         TEXT_FILEPATH = "/xhtml" + TEXT_FILEPATH
         SECTION_TEXT_FILEPATH = "/xhtml" + SECTION_TEXT_FILEPATH
         COVER_FILEPATH = "/xhtml" + COVER_FILEPATH
+        TOC_FILEPATH = "/xhtml" + TOC_FILEPATH
         NAV_FILEPATH = NAV_FILEPATH
         FONT_FILEPATH = "/fonts" + FONT_FILEPATH
         IMAGE_FILEPATH = "/images" + IMAGE_FILEPATH
@@ -281,6 +283,7 @@ class EPUB_Output(object):
         self.guide = []
         self.css_files = set()
         self.pagemap = []
+        self.dom_image_filenames = set()
 
         self.asin = ""
         self.book_id = ""
@@ -472,6 +475,8 @@ class EPUB_Output(object):
             else:
                 self.create_epub3_nav()
 
+            self.rename_landmark_book_parts()
+
         if self.fixed_layout and (self.original_height is None or self.original_width is None) and (self.is_comic or self.is_children):
             self.compare_fixed_layout_viewports()
 
@@ -525,6 +530,204 @@ class EPUB_Output(object):
             log.debug("new_book_part %s" % filename)
 
         return book_part
+
+    def rename_landmark_book_parts(self):
+        landmark_targets = []
+
+        for nav_part in self.book_parts:
+            if nav_part.is_nav:
+                for nav in nav_part.body().findall("nav"):
+                    if nav.get(EPUB_TYPE) != "landmarks":
+                        continue
+
+                    for a in nav.iter("a"):
+                        epub_type = a.get(EPUB_TYPE, "").split()
+                        if "cover" in epub_type:
+                            landmark_targets.append(("cover", a.get("href"), nav_part.filename))
+                        elif "toc" in epub_type:
+                            landmark_targets.append(("toc", a.get("href"), nav_part.filename))
+
+        renamed = {}
+        for landmark_type, href, ref_from in landmark_targets:
+            target_filename = self.landmark_target_filename(href, ref_from)
+            if not target_filename:
+                continue
+
+            new_filename = self.COVER_FILEPATH if landmark_type == "cover" else self.TOC_FILEPATH
+            if target_filename in renamed:
+                if renamed[target_filename] != new_filename:
+                    log.warning("Landmark %s points to %s already renamed to %s" % (
+                        landmark_type, target_filename, renamed[target_filename]))
+                continue
+
+            if self.rename_book_part_file(target_filename, new_filename):
+                renamed[target_filename] = new_filename
+
+    def landmark_target_filename(self, href, ref_from):
+        if not href:
+            return None
+
+        filename = get_url_filename(urlabspath(href, ref_from=ref_from))
+        if filename is None:
+            return None
+
+        filename = remove_url_fragment(filename)
+        if not filename.endswith(".xhtml"):
+            return None
+
+        return filename
+
+    def rename_book_part_file(self, old_filename, new_filename):
+        if old_filename == new_filename:
+            return True
+
+        book_part = None
+        for bp in self.book_parts:
+            if bp.filename == old_filename:
+                book_part = bp
+                break
+
+        if book_part is None:
+            log.warning("Landmark target book part not found: %s" % old_filename)
+            return False
+
+        for bp in self.book_parts:
+            if bp.filename == new_filename:
+                log.warning("Cannot rename %s to existing book part filename %s" % (old_filename, new_filename))
+                return False
+
+        book_part.filename = new_filename
+        self.update_book_part_references(old_filename, new_filename)
+        return True
+
+    def update_book_part_references(self, old_filename, new_filename):
+        def replace_url(url, ref_from):
+            abs_url = urlabspath(url, ref_from=ref_from)
+            filename = get_url_filename(abs_url)
+            if filename != old_filename:
+                return url
+
+            fragment = abs_url.partition("#")[2]
+            new_url = new_filename + ("#" + fragment if fragment else "")
+            return urlrelpath(new_url, ref_from=ref_from)
+
+        for anchor_name, uri in list(getattr(self, "anchor_uri", {}).items()):
+            if remove_url_fragment(uri) == old_filename:
+                fragment = uri.partition("#")[2]
+                self.anchor_uri[anchor_name] = new_filename + ("#" + fragment if fragment else "")
+
+        for guide_entry in self.guide:
+            if guide_entry.target and remove_url_fragment(guide_entry.target) == old_filename:
+                fragment = guide_entry.target.partition("#")[2]
+                guide_entry.target = new_filename + ("#" + fragment if fragment else "")
+
+        for page_entry in self.pagemap:
+            if page_entry.target and remove_url_fragment(page_entry.target) == old_filename:
+                fragment = page_entry.target.partition("#")[2]
+                page_entry.target = new_filename + ("#" + fragment if fragment else "")
+
+        def update_toc(ncx_toc):
+            for toc_entry in ncx_toc:
+                if toc_entry.target and remove_url_fragment(toc_entry.target) == old_filename:
+                    fragment = toc_entry.target.partition("#")[2]
+                    toc_entry.target = new_filename + ("#" + fragment if fragment else "")
+
+                if toc_entry.children:
+                    update_toc(toc_entry.children)
+
+        update_toc(self.ncx_toc)
+
+        for book_part in self.book_parts:
+            for elem in book_part.html.iter("*"):
+                for attr in ["href", "src", XLINK_HREF]:
+                    if attr in elem.attrib:
+                        elem.set(attr, replace_url(elem.get(attr), book_part.filename))
+
+    def prepare_dom_image_filenames(self, book_part):
+        for elem in book_part.body().iter("*"):
+            attr = self.image_reference_attr(elem)
+            if attr is None:
+                continue
+
+            filename = get_url_filename(urlabspath(elem.get(attr), ref_from=book_part.filename))
+            filename = remove_url_fragment(filename or "")
+            if not filename or filename in self.dom_image_filenames or self.is_cover_image_filename(filename):
+                continue
+
+            new_filename = self.rename_image_file(
+                filename,
+                "illustration" if self.is_illustration_image(elem) else "page")
+            if new_filename:
+                self.dom_image_filenames.add(filename)
+                self.dom_image_filenames.add(new_filename)
+
+    def image_reference_attr(self, elem):
+        if elem.tag == "img" and elem.get("src"):
+            return "src"
+
+        if elem.tag == qname(SVG_NS_URI, "image") and elem.get(XLINK_HREF):
+            return XLINK_HREF
+
+        return None
+
+    def is_cover_image_filename(self, filename):
+        manifest_entry = self.manifest_files.get(remove_url_fragment(filename))
+        return manifest_entry is not None and manifest_entry.is_cover_image
+
+    def is_illustration_image(self, elem):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            if parent.tag == "div":
+                return True
+            parent = parent.getparent()
+
+        return False
+
+    def rename_image_file(self, old_filename, image_role, html_by_filename=None):
+        old_filename = remove_url_fragment(old_filename)
+        if old_filename not in self.oebps_files:
+            return None
+
+        ext = posixpath.splitext(old_filename)[1]
+        if RESOURCE_TYPE_OF_EXT.get(ext) != "image":
+            return None
+
+        if image_role == "cover":
+            new_filename = self.IMAGE_FILEPATH % ("cover" + ext)
+        else:
+            new_filename = self.numbered_image_filename(image_role, ext)
+
+        if old_filename == new_filename:
+            return new_filename
+
+        output_file = self.oebps_files.pop(old_filename)
+        self.oebps_files[new_filename] = output_file
+
+        manifest_entry = self.manifest_files.pop(old_filename, None)
+        if manifest_entry is not None:
+            manifest_entry.filename = new_filename
+            self.manifest_files[new_filename] = manifest_entry
+
+        if html_by_filename is None:
+            html_by_filename = dict((book_part.filename, book_part.html) for book_part in self.book_parts)
+
+        for filename, html in html_by_filename.items():
+            for elem in html.iter("*"):
+                for attr in ["src", XLINK_HREF]:
+                    if attr in elem.attrib:
+                        elem.set(attr, self.replace_resource_url(elem.get(attr), filename, old_filename, new_filename))
+
+        return new_filename
+
+    def replace_resource_url(self, url, ref_from, old_filename, new_filename):
+        abs_url = urlabspath(url, ref_from=ref_from)
+        filename = get_url_filename(abs_url)
+        if remove_url_fragment(filename or "") != old_filename:
+            return url
+
+        fragment = abs_url.partition("#")[2]
+        new_url = new_filename + ("#" + fragment if fragment else "")
+        return urlrelpath(new_url, ref_from=ref_from)
 
     def link_css_file(self, book_part, css_file, css_type="text/css"):
         head = book_part.head()
@@ -616,7 +819,9 @@ class EPUB_Output(object):
         image_data = outfile.getvalue()
 
         image_filename = self.IMAGE_FILEPATH % "cover.jpg"
-        self.manifest_resource(image_filename, data=image_data)
+        manifest_entry = self.manifest_resource(image_filename, data=image_data)
+        if manifest_entry is not None:
+            manifest_entry.is_cover_image = True
 
         book_part = self.new_book_part(filename=self.COVER_FILEPATH, first=True)
         div_elem = etree.SubElement(book_part.body(), "div")
@@ -723,6 +928,8 @@ class EPUB_Output(object):
 
             if BEAUTIFY_HTML:
                 self.beautify_html(book_part)
+
+            self.prepare_dom_image_filenames(book_part)
 
             if body.find(".//%s" % SVG) is not None:
                 book_part.opf_properties.add("svg")

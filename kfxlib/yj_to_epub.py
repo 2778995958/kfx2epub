@@ -92,12 +92,12 @@ class KFX_EPUB(
         for style_name, yj_properties in self.book_data.get("$157", {}).items():
             self.check_fragment_name(yj_properties, "$157", style_name, delete=False)
 
-        self.process_reading_order()
-
         if self.cover_resource and not self.html_cover:
-            manifest_entry = self.process_external_resource(self.cover_resource).manifest_entry
+            manifest_entry = self.process_external_resource(self.cover_resource, image_role="cover").manifest_entry
             if manifest_entry is not None:
                 manifest_entry.is_cover_image = True
+
+        self.process_reading_order()
 
         self.fixup_anchors_and_hrefs()
         self.fixup_illustrated_layout_anchors()

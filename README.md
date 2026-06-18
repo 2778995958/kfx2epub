@@ -2,6 +2,12 @@
 
 將 Kindle 的 `KFX` / `KFX-ZIP` 轉換為 `EPUB` 的工具。
 
+## 語言版本
+
+- [繁體中文](README.md)
+- [English](README-en.md)
+- [日本語](README-jp.md)
+
 ## 目前版本功能
 
 - 修正 EPUB3 XHTML 輸出，保留簡化的 `<!DOCTYPE html>`
@@ -15,6 +21,7 @@
 - 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_books.py` 同目錄下的 `output_epub`
 - 自動以 `[作者] 書名.epub` 格式命名輸出
 - 自動將檔名中的非法字元轉為全型安全字元
+- EPUB 內部 XHTML 與圖片檔名改用規律命名，例如 `p-0000.xhtml`、`cover.xhtml`、`toc.xhtml`、`cover.ext`、`i-0000.ext`、`p-0000.ext`
 
 ## 功能
 
@@ -94,6 +101,26 @@ python convert_books.py D:/books/kfx D:/books/epub
 ```text
 [山田太郎] 範例書名.epub
 ```
+
+## EPUB 內部檔名規則
+
+轉換後的 EPUB 會盡量使用規律、易讀的內部檔名，避免沿用 KFX 原始 section/resource 名稱造成看似亂碼的檔名。
+
+### XHTML
+
+- 一般內容頁從 `xhtml/p-0000.xhtml` 開始依序命名。
+- 封面頁依 EPUB3 `nav.xhtml` landmarks 中的 `epub:type="cover"` 判斷，命名為 `xhtml/cover.xhtml`。
+- 書內目錄頁依 EPUB3 `nav.xhtml` landmarks 中的 `epub:type="toc"` 判斷，命名為 `xhtml/toc.xhtml`。
+- `epub:type="bodymatter"` / Beginning 不作為封面或目錄判斷依據，避免和封面同頁時誤判。
+
+### 圖片
+
+- 封面圖片使用 `images/cover.ext`。
+- 插圖型圖片使用 `images/i-0000.ext` 起依序命名。
+- 其他一般圖片使用 `images/p-0000.ext` 起依序命名。
+- `ext` 代表保留實際圖片副檔名，例如 `.jpg`、`.png`、`.webp`。
+
+插圖型圖片會依最終 XHTML DOM 判斷：若圖片位於類似 `body > div > (如有) svg > img/image` 的結構中，會歸類為插圖圖片並使用 `i-` 序列；其他圖片則使用 `p-` 序列。
 
 ## 注意事項
 

@@ -25,7 +25,7 @@ INCLUDE_HERO_IMAGE_PROPERTIES = True
 SKIP_FIT_WIDTH_FOR_IMAGES = True
 ROUND_TRIP_ORIGINAL_STORIES = False
 COMBINE_NESTED_DIVS = True
-RETAIN_SECTION_FILENAMES = True
+RETAIN_SECTION_FILENAMES = False
 
 LIST_STYLE_TYPES = {
     "$346": "ol",
@@ -363,7 +363,7 @@ class KFX_EPUB_Content(object):
 
         self.check_empty(page_template, "Section %s page_template" % section_name)
 
-    def process_story(self, story, parent, book_part, writing_mode):
+    def process_story(self, story, parent, book_part, writing_mode, image_role="page"):
         story_name = story.pop("$176")
         if self.DEBUG:
             log.debug("Processing story %s" % story_name)
@@ -374,12 +374,13 @@ class KFX_EPUB_Content(object):
         if location_id:
             self.process_position(location_id, 0, parent)
 
-        self.process_content_list(story.pop("$146", []), parent, book_part, writing_mode)
+        self.process_content_list(story.pop("$146", []), parent, book_part, writing_mode, image_role=image_role)
 
         self.pop_context()
         self.check_empty(story, self.content_context)
 
-    def add_content(self, content, parent, book_part, writing_mode, content_layout=None, fixed_height=None, fixed_width=None):
+    def add_content(self, content, parent, book_part, writing_mode, content_layout=None, fixed_height=None, fixed_width=None,
+                    image_role="page"):
         if "$145" in content:
             text_elem = etree.SubElement(parent, "span")
             text = self.content_text(content.pop("$145"))
@@ -393,22 +394,23 @@ class KFX_EPUB_Content(object):
 
         elif "$146" in content:
             self.process_content_list(
-                content.pop("$146", []), parent, book_part, writing_mode, content_layout, fixed_height, fixed_width)
+                content.pop("$146", []), parent, book_part, writing_mode, content_layout, fixed_height, fixed_width, image_role)
 
         elif "$176" in content:
             story_content = self.get_named_fragment(content, ftype="$259")
-            self.process_story(story_content, parent, book_part, writing_mode)
+            self.process_story(story_content, parent, book_part, writing_mode, image_role)
 
     def process_content_list(self, content_list, parent, book_part, writing_mode, content_layout=None,
-                             fixed_height=None, fixed_width=None):
+                             fixed_height=None, fixed_width=None, image_role="page"):
         if ion_type(content_list) is not IonList:
             raise Exception("%s has unknown content_list data type: %s" % (self.content_context, type_name(content_list)))
 
         for content in content_list:
-            self.process_content(content, parent, book_part, writing_mode, content_layout, fixed_height, fixed_width)
+            self.process_content(content, parent, book_part, writing_mode, content_layout, fixed_height, fixed_width,
+                                 image_role=image_role)
 
     def process_content(self, content, parent, book_part, writing_mode, content_layout=None, fixed_height=None,
-                        fixed_width=None, is_section=False):
+                        fixed_width=None, is_section=False, image_role="page"):
         if self.DEBUG:
             log.debug("process content: %s\n" % repr(content))
 
@@ -421,7 +423,7 @@ class KFX_EPUB_Content(object):
 
         if data_type is IonSymbol:
             self.process_content(self.get_fragment(ftype="$608", fid=content), parent, book_part,
-                                 writing_mode, content_layout, fixed_height, fixed_width)
+                                 writing_mode, content_layout, fixed_height, fixed_width, image_role=image_role)
             return
 
         if data_type is not IonStruct:
@@ -463,7 +465,7 @@ class KFX_EPUB_Content(object):
 
                 self.add_style(content_elem, {"white-space": "nowrap"})
 
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$271":
             content_elem.tag = "img"
@@ -489,7 +491,7 @@ class KFX_EPUB_Content(object):
             alt_text = content.pop("$584", "")
             content.pop("$597", None)
 
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
             self.process_plugin(resource_name, alt_text, content_elem, book_part)
 
         elif content_type == "$439":
@@ -499,7 +501,7 @@ class KFX_EPUB_Content(object):
             if layout not in ["$323", None]:
                 log.error("%s has unknown %s layout: %s" % (self.content_context, content_type, layout))
 
-            self.add_content(content, content_elem, book_part, writing_mode, layout)
+            self.add_content(content, content_elem, book_part, writing_mode, layout, image_role=image_role)
 
             self.add_style(content_elem, {"display": "none"})
 
@@ -552,7 +554,13 @@ class KFX_EPUB_Content(object):
             else:
                 fixed_height = fixed_width = None
 
-            self.add_content(content, content_elem, book_part, writing_mode, layout, fixed_height, fixed_width)
+            child_image_role = "page"
+            if layout == ("$322" if writing_mode != "vertical-rl" else "$323") and not book_part.is_fxl:
+                child_image_role = "illustration"
+            elif is_scale_fit_layout and not (book_part.is_fxl and self.is_pdf_backed):
+                child_image_role = "illustration"
+
+            self.add_content(content, content_elem, book_part, writing_mode, layout, fixed_height, fixed_width, child_image_role)
 
             if layout is None:
                 pass
@@ -737,7 +745,7 @@ class KFX_EPUB_Content(object):
                     except Exception:
                         log.error("Could not add list_indent since listalready has padding-left")
 
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$277":
             if parent.tag not in {"ol", "ul"}:
@@ -759,7 +767,7 @@ class KFX_EPUB_Content(object):
                         except Exception:
                             log.error("Could not add list_indent since parent and listitem both already have padding-left")
 
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$278":
 
@@ -813,23 +821,23 @@ class KFX_EPUB_Content(object):
                     if side not in {"$58", "$60", "$59", "$61"}:
                         log.error("%s table has unexpected truncated_bounds side: %s" % (self.content_context, side))
 
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$454":
             content_elem.tag = "tbody"
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$151":
             content_elem.tag = "thead"
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$455":
             content_elem.tag = "tfoot"
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         elif content_type == "$279":
             content_elem.tag = "tr"
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
             for idx, child_elem in enumerate(list(content_elem)):
                 if child_elem.tag == "div":
@@ -883,7 +891,7 @@ class KFX_EPUB_Content(object):
         else:
             log.error("%s has unknown content type: %s" % (self.content_context, content_type))
             content_elem.tag = "div"
-            self.add_content(content, content_elem, book_part, writing_mode)
+            self.add_content(content, content_elem, book_part, writing_mode, image_role=image_role)
 
         if "$754" in content:
             self.register_link_id(content.pop("$754"), "main_content")
@@ -944,13 +952,13 @@ class KFX_EPUB_Content(object):
 
                     if self.evaluate_binary_condition(condition):
                         alt_content_elem = etree.Element("div")
-                        self.process_story(alt_content_story, alt_content_elem, book_part, writing_mode)
+                        self.process_story(alt_content_story, alt_content_elem, book_part, writing_mode, image_role)
                         content_elem = alt_content_elem[0]
                         log.warning("%s table alt_content was included", self.content_context)
                     else:
                         orig_save_resources = self.save_resources
                         self.save_resources = False
-                        self.process_story(alt_content_story, etree.Element("div"), book_part, writing_mode)
+                        self.process_story(alt_content_story, etree.Element("div"), book_part, writing_mode, image_role)
                         self.save_resources = orig_save_resources
                 else:
                     log.warning("%s content has unknown %s annotation type: %s" % (self.content_context, content_type, annotation_type))
@@ -1194,7 +1202,7 @@ class KFX_EPUB_Content(object):
                     ruby_content.pop("$758")
 
                     temp_rt_elem = etree.Element("div")
-                    self.process_content(ruby_content, temp_rt_elem, book_part, writing_mode)
+                    self.process_content(ruby_content, temp_rt_elem, book_part, writing_mode, image_role=image_role)
 
                     for rt_child in temp_rt_elem.iterfind("*"):
                         rt_style = self.get_style(rt_child)

@@ -31,6 +31,8 @@ class KFX_EPUB_Resources(object):
         self.save_resources = True
         self.location_filenames = {}
         self.reported_pdf_errors = set()
+        self.illustration_image_index = 0
+        self.page_image_index = 0
 
     def get_external_resource(self, resource_name, ignore_variants=False):
         resource_obj = self.resource_cache.get(resource_name)
@@ -183,7 +185,7 @@ class KFX_EPUB_Resources(object):
         return resource_obj
 
     def process_external_resource(self, resource_name, save=True, process_referred=False, save_referred=False,
-                                  is_plugin=False, is_referred=False):
+                                  is_plugin=False, is_referred=False, image_role=None):
 
         resource_obj = self.get_external_resource(resource_name)
 
@@ -191,6 +193,10 @@ class KFX_EPUB_Resources(object):
             if resource_obj.manifest_entry is None:
                 filename = root_filename(resource_obj.location) if is_referred else resource_obj.filename
                 filename, fragment_sep, fragment = filename.partition("#")
+
+                if not is_referred and image_role in {"cover", "illustration", "page"}:
+                    filename = self.numbered_image_filename(image_role, posixpath.splitext(filename)[1])
+
                 base_filename = filename
                 cnt = 0
                 while filename in self.oebps_files:
@@ -231,6 +237,26 @@ class KFX_EPUB_Resources(object):
             log.error("Unexpected non-plugin resource format %s for %s" % (resource_obj.extension, resource_name))
 
         return resource_obj
+
+    def numbered_image_filename(self, image_role, extension):
+        if image_role == "cover":
+            return self.IMAGE_FILEPATH % ("cover" + extension)
+
+        if image_role == "illustration":
+            prefix = "i"
+            index_attr = "illustration_image_index"
+        elif image_role == "page":
+            prefix = "p"
+            index_attr = "page_image_index"
+        else:
+            raise Exception("Unexpected image role: %s" % image_role)
+
+        while True:
+            index = getattr(self, index_attr)
+            setattr(self, index_attr, index + 1)
+            filename = self.IMAGE_FILEPATH % ("%s-%04d%s" % (prefix, index, extension))
+            if filename not in self.oebps_files and filename not in self.manifest_files:
+                return filename
 
     def locate_raw_media(self, location, report_missing=True):
         try:
