@@ -20,7 +20,7 @@ This tool is currently intended and tested only for Japanese Kindle books. KFX b
 - Supports batch conversion of `*.kfx` and `*.kfx-zip` files in a folder.
 - Supports converting a single `.kfx` / `.kfx-zip` file.
 - Supports dragging a single file or an entire folder onto `convert_kfx2epub.py`.
-- When using drag-and-drop, output is still written to the `output_epub` folder next to `convert_kfx2epub.py`.
+- When using drag-and-drop, output is still written to the `archived_epub` folder next to `convert_kfx2epub.py`.
 - Automatically names output files in the `[Author] Book Title.epub` format.
 - Automatically converts illegal filename characters into full-width safe characters.
 - Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-000.ext`, and `image/p-000.ext`.
@@ -46,10 +46,10 @@ python convert_kfx2epub.py [input_dir_or_file] [output_dir]
 
 - `input_dir_or_file`
   - Input folder, or a single `.kfx` / `.kfx-zip` file.
-  - Defaults to the `output_kfx-zip` folder next to the script.
+  - Defaults to the `archived_kfx` folder next to the script.
 - `output_dir`
   - Output folder.
-  - Defaults to the `output_epub` folder next to the script.
+  - Defaults to the `archived_epub` folder next to the script.
 
 ### Examples
 
@@ -61,11 +61,11 @@ python convert_kfx2epub.py
 
 Default input:
 
-- `./output_kfx-zip`
+- `./archived_kfx`
 
 Default output:
 
-- `./output_epub`
+- `./archived_epub`
 
 #### 2. Process a single file or folder
 
@@ -75,7 +75,7 @@ python convert_kfx2epub.py D:/books/sample.kfx-zip
 
 You can also drag a single `.kfx` / `.kfx-zip` file, or an entire folder, onto `convert_kfx2epub.py`.
 
-In this case, output is still written to the `output_epub` folder next to `convert_kfx2epub.py`.
+In this case, output is still written to the `archived_epub` folder next to `convert_kfx2epub.py`.
 
 #### 3. Specify input and output folders
 

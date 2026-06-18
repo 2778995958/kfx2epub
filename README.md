@@ -20,7 +20,7 @@
 - 支援資料夾批次轉換 `*.kfx` 與 `*.kfx-zip`
 - 支援單一 `.kfx` / `.kfx-zip` 檔案轉換
 - 支援將單一檔案或整個資料夾拖曳到 `convert_kfx2epub.py` 上執行
-- 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_kfx2epub.py` 同目錄下的 `output_epub`
+- 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_kfx2epub.py` 同目錄下的 `archived_epub`
 - 自動以 `[作者] 書名.epub` 格式命名輸出
 - 自動將檔名中的非法字元轉為全型安全字元
 - EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-000.ext`、`image/p-000.ext`
@@ -46,10 +46,10 @@ python convert_kfx2epub.py [input_dir_or_file] [output_dir]
 
 - `input_dir_or_file`
   - 輸入資料夾，或單一 `.kfx` / `.kfx-zip` 檔案
-  - 預設為腳本同目錄下的 `output_kfx-zip`
+  - 預設為腳本同目錄下的 `archived_kfx`
 - `output_dir`
   - 輸出目錄
-  - 預設為腳本同目錄下的 `output_epub`
+  - 預設為腳本同目錄下的 `archived_epub`
 
 ### 範例
 
@@ -61,11 +61,11 @@ python convert_kfx2epub.py
 
 預設會讀取：
 
-- `./output_kfx-zip`
+- `./archived_kfx`
 
 輸出到：
 
-- `./output_epub`
+- `./archived_epub`
 
 #### 2. 處理單一檔案或資料夾
 
@@ -75,7 +75,7 @@ python convert_kfx2epub.py D:/books/sample.kfx-zip
 
 或直接把單一 `.kfx` / `.kfx-zip` 檔案、或整個資料夾拖曳到 `convert_kfx2epub.py` 上執行。
 
-這時候輸出仍會寫到 `convert_kfx2epub.py` 同目錄下的 `output_epub`。
+這時候輸出仍會寫到 `convert_kfx2epub.py` 同目錄下的 `archived_epub`。
 
 #### 3. 指定輸入與輸出目錄
 

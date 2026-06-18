@@ -119,15 +119,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "input_dir",
         nargs="?",
-        default=str(script_dir / "output_kfx-zip"),
-        help="Input folder, or a single .kfx / .kfx-zip file. Defaults to output_kfx-zip next to this script.",
+        default=str(script_dir / "archived_kfx"),
+        help="Input folder, or a single .kfx / .kfx-zip file. Defaults to archived_kfx next to this script.",
     )
 
     parser.add_argument(
         "output_dir",
         nargs="?",
-        default=str(script_dir / "output_epub"),
-        help="Output folder. Defaults to output_epub next to this script.",
+        default=str(script_dir / "archived_epub"),
+        help="Output folder. Defaults to archived_epub next to this script.",
     )
 
     args = parser.parse_args()
