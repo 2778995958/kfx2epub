@@ -15,6 +15,7 @@ This tool is currently intended and tested only for Japanese Kindle books. KFX b
 - Fixes EPUB3 XHTML output and keeps the simplified `<!DOCTYPE html>`.
 - Adds a default `style-reset.css`, imported by `book-style.css` through `@import "style-reset.css";`, to centralize basic text layout styles.
 - Uses a separate `fixed-layout-jp.css` for fixed-layout pages, keeping it separate from normal text styles.
+- For fixed-layout comics that already have left/right page spreads, unmarked spread pages default to `rendition:page-spread-center`.
 - Avoids linking unnecessary `book-style.css` from fixed-layout pages.
 - Generates only CSS files that are actually linked by XHTML, reducing orphan CSS files.
 - Supports batch conversion of `*.kfx` and `*.kfx-zip` files in a folder.
@@ -23,7 +24,7 @@ This tool is currently intended and tested only for Japanese Kindle books. KFX b
 - When using drag-and-drop, output is still written to the `archived_epub` folder next to `convert_kfx2epub.py`.
 - Automatically names output files in the `[Author] Book Title.epub` format.
 - Automatically converts illegal filename characters into full-width safe characters.
-- Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-000.ext`, and `image/p-000.ext`.
+- Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-001.ext`, and `image/p-001.ext`.
 
 ## Features
 
@@ -131,8 +132,8 @@ The converted EPUB tries to use regular, readable internal filenames instead of 
 
 - The image folder is `item/image/`.
 - The cover image uses `item/image/cover.ext`.
-- Illustration-style images are named sequentially from `item/image/i-000.ext`.
-- Other normal images are named sequentially from `item/image/p-000.ext`.
+- Illustration-style images are named sequentially from `item/image/i-001.ext`.
+- Other normal images are named sequentially from `item/image/p-001.ext`.
 - Image sequence numbers use at least 3 digits. If the number of images in the same type exceeds 999, the width expands automatically to 4 digits, 5 digits, and so on.
 - `ext` means the actual image extension is preserved, such as `.jpg`, `.png`, or `.webp`.
 

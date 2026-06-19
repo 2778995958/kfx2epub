@@ -31,8 +31,8 @@ class KFX_EPUB_Resources(object):
         self.save_resources = True
         self.location_filenames = {}
         self.reported_pdf_errors = set()
-        self.illustration_image_index = 0
-        self.page_image_index = 0
+        self.illustration_image_index = 1
+        self.page_image_index = 1
         self.illustration_image_sequence_width = 3
         self.page_image_sequence_width = 3
 
