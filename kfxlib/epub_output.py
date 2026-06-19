@@ -362,6 +362,8 @@ class EPUB_Output(object):
     def manifest_id_for_filename(self, filename):
         basename = filename.rpartition("/")[2]
         basename = posixpath.splitext(basename)[0] or basename
+        if filename.lstrip("/").startswith("image/") and basename != "cover":
+            basename = "img-" + basename
         return self.fix_html_id(basename[:64])
 
     def manifest_resource(self, filename, opf_properties=None, linear=None, external=False,
@@ -1252,7 +1254,7 @@ class EPUB_Output(object):
         title.text = self.title
         if self.title_pronunciation and not self.generate_epub2:
             title.set("id", "title")
-            add_metadata_meta_refines_property("#title", "alternate-script", self.title_pronunciation)
+            add_metadata_meta_refines_property("#title", "file-as", self.title_pronunciation)
 
         for i, author in enumerate(self.authors):
             creator = etree.SubElement(metadata, qname(DC_NS_URI, "creator"))
@@ -1265,7 +1267,7 @@ class EPUB_Output(object):
                 add_metadata_meta_refines_property("#" + author_id, "role", "aut", prefix("marc:relators"))
 
                 if len(self.author_pronunciations) > i:
-                    add_metadata_meta_refines_property("#" + author_id, "alternate-script", self.author_pronunciations[i])
+                    add_metadata_meta_refines_property("#" + author_id, "file-as", self.author_pronunciations[i])
             else:
                 creator.set(qname(ALT_OPF_NS_URI, "role"), "aut")
 
@@ -1434,7 +1436,7 @@ class EPUB_Output(object):
 
                 itemref_properties = manifest_entry.opf_properties & SPINE_ITEMREF_PROPERTIES
 
-                if (tweaks.get("kfx_input_add_comic_spread_center", False) and self.is_comic
+                if (tweaks.get("kfx_input_add_comic_spread_center", True) and self.is_comic
                         and has_page_spread and not itemref_properties):
                     itemref_properties.add("rendition:page-spread-center")
 

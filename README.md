@@ -15,6 +15,7 @@
 - 修正 EPUB3 XHTML 輸出，保留簡化的 `<!DOCTYPE html>`
 - 加入預設 `style-reset.css`，由 `book-style.css` 透過 `@import "style-reset.css";` 載入，集中管理一般文字排版基礎樣式
 - 固定版式頁面改用獨立的 `fixed-layout-jp.css`，和一般文字頁樣式分開
+- 固定版式漫畫若已有左右頁 spread，未標示 spread 的頁面會預設補上 `rendition:page-spread-center`
 - 避免 fixed-layout 頁面同時連結多餘的 `book-style.css`
 - 只產生實際被 XHTML 連結的 CSS 檔案，減少孤兒 CSS
 - 支援資料夾批次轉換 `*.kfx` 與 `*.kfx-zip`
@@ -23,7 +24,7 @@
 - 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_kfx2epub.py` 同目錄下的 `archived_epub`
 - 自動以 `[作者] 書名.epub` 格式命名輸出
 - 自動將檔名中的非法字元轉為全型安全字元
-- EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-000.ext`、`image/p-000.ext`
+- EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-001.ext`、`image/p-001.ext`
 
 ## 功能
 
@@ -131,8 +132,8 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 
 - 圖片目錄使用 `item/image/`。
 - 封面圖片使用 `item/image/cover.ext`。
-- 插圖型圖片使用 `item/image/i-000.ext` 起依序命名。
-- 其他一般圖片使用 `item/image/p-000.ext` 起依序命名。
+- 插圖型圖片使用 `item/image/i-001.ext` 起依序命名。
+- 其他一般圖片使用 `item/image/p-001.ext` 起依序命名。
 - 圖片序號至少使用 3 位數；若同類圖片數量超過 999，會自動擴展為 4 位、5 位等。
 - `ext` 代表保留實際圖片副檔名，例如 `.jpg`、`.png`、`.webp`。
 
