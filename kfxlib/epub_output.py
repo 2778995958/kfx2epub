@@ -171,6 +171,7 @@ class BookPart(OPFProperties):
         self.is_cover_page = False
         self.nmdl_template_id = None
         self.writing_mode_value = None
+        self.has_vertical_rl_class = False
 
     def head(self):
         head = self.html.find("head")
@@ -1139,6 +1140,7 @@ class EPUB_Output(object):
 
     def convert_to_fit_image_page(self, book_part):
         # ebpaj single-image page: <body class="p-image"><div class="main"><p><img class="fit"/></p>
+        # Cover pages use <body epub:type="cover" class="p-cover">.
         body = book_part.body()
         image_sources = []
 
@@ -1165,7 +1167,11 @@ class EPUB_Output(object):
             return
 
         body.clear()
-        body.set("class", "p-image")
+        if book_part.is_cover_page:
+            body.set(EPUB_TYPE, "cover")
+            body.set("class", "p-cover")
+        else:
+            body.set("class", "p-image")
         body.text = "\n"
         main = etree.SubElement(body, "div")
         main.set("class", "main")
@@ -1205,8 +1211,7 @@ class EPUB_Output(object):
                 self.ensure_main_wrapper(body)
                 if not body.get("class"):
                     body.set("class", "p-text")
-                wm = book_part.writing_mode_value or self.writing_mode
-                if wm == "vertical-rl":
+                if book_part.has_vertical_rl_class:
                     existing.insert(0, "vrtl")
 
         if existing:
@@ -1973,7 +1978,7 @@ class EPUB_Output(object):
             self.hide_element(nav)
 
         h1 = etree.SubElement(nav, "h1")
-        h1.text = "Table of contents"
+        h1.text = "Navigation"
 
         self.create_nav_list(nav, self.ncx_toc, book_part)
 

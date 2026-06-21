@@ -1458,6 +1458,11 @@ class KFX_EPUB_Properties(object):
                     if style_modified:
                         self.set_style(e, style)
 
+                    if (style.get("writing-mode") == "vertical-rl" or
+                            style.get("-webkit-writing-mode") == "vertical-rl" or
+                            style.get("-epub-writing-mode") == "vertical-rl"):
+                        book_part.has_vertical_rl_class = True
+
                     if (CVT_DIRECTION_PROPERTY_TO_MARKUP or not self.generate_epub2) and ("direction" in style or "unicode-bidi" in style):
                         unicode_bidi = style.get("unicode-bidi", "normal")
 
@@ -1602,12 +1607,37 @@ class KFX_EPUB_Properties(object):
                     target = self.media_queries[media_query] if media_query else self.css_rules
                     target[class_selector(class_name)] = class_style
 
+        self.update_vertical_rl_class_usage()
+
         for class_style in list(self.css_rules.values()) + self.font_faces:
             self.inventory_style(class_style)
 
         for mq_classes in self.media_queries.values():
             for class_style in mq_classes.values():
                 self.inventory_style(class_style)
+
+    def update_vertical_rl_class_usage(self):
+        vertical_rl_classes = set()
+
+        for selector, style in self.css_rules.items():
+            if (selector.startswith(".") and
+                    not any(c in selector for c in " ,:#[]>") and
+                    (style.get("writing-mode") == "vertical-rl" or
+                     style.get("-webkit-writing-mode") == "vertical-rl" or
+                     style.get("-epub-writing-mode") == "vertical-rl")):
+                vertical_rl_classes.add(selector[1:])
+
+        self.vertical_rl_classes = vertical_rl_classes
+
+        for book_part in self.book_parts:
+            if not vertical_rl_classes or book_part.has_vertical_rl_class:
+                continue
+
+            body = book_part.body()
+            for elem in [body] + list(body.iter("*")):
+                if vertical_rl_classes.intersection(elem.get("class", "").split()):
+                    book_part.has_vertical_rl_class = True
+                    break
 
     def inventory_style(self, style):
         reported = set()
