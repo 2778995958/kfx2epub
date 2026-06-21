@@ -7,6 +7,7 @@ from PIL import (Image, ImageDraw, ImageFont)
 import posixpath
 import re
 import uuid
+import xml.sax.saxutils
 import zipfile
 
 try:
@@ -1213,6 +1214,17 @@ class EPUB_Output(object):
         else:
             book_part.html.attrib.pop("class", None)
 
+    def format_xhtml_document_header(self, html_str):
+        declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        html_str = declaration + html_str
+        html_str = html_str.replace(b"<html ", b"<html\n ", 1)
+        html_str = html_str.replace(b'" xmlns:epub=', b'"\n xmlns:epub=', 1)
+        html_str = html_str.replace(b'" xml:lang=', b'"\n xml:lang=', 1)
+        html_str = html_str.replace(b'" class=', b'"\n class=', 1)
+        html_str = html_str.replace(b'">\n<head>', b'"\n>\n<head>', 1)
+        html_str = html_str.replace(b"</head>\n<body", b"</head>\n\n<body", 1)
+        return html_str
+
     def save_book_parts(self):
         for book_part in self.book_parts:
             if self.DEBUG:
@@ -1269,10 +1281,12 @@ class EPUB_Output(object):
                 document = etree.ElementTree(book_part.html)
                 doctype = b"<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.1//EN' 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd'>"
 
-                html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=True)
+                html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=False)
 
                 if not self.generate_epub2:
                     html_str = html_str.replace(doctype + b"\n", b"<!DOCTYPE html>\n")
+
+                html_str = self.format_xhtml_document_header(html_str)
 
                 self.manifest_resource(
                     book_part.filename, book_part.opf_properties, book_part.linear, idref=book_part.idref,
@@ -1383,6 +1397,178 @@ class EPUB_Output(object):
                 if e.tag in {"h1", "h2", "h3", "h4", "h5", "h6", "li", "ol"} and not e.tail:
                     e.tail = "\n"
 
+    def opf_tag_name(self, elem):
+        ns = namespace(elem.tag)
+        name = localname(elem.tag)
+        if ns == DC_NS_URI:
+            return "dc:" + name
+        return name
+
+    def opf_attr_name(self, attr):
+        ns = namespace(attr)
+        name = localname(attr)
+        if ns == XML_NS_URI:
+            return "xml:" + name
+        return name
+
+    def opf_attrs(self, elem, order=()):
+        items = dict((self.opf_attr_name(k), v) for k, v in elem.attrib.items())
+        names = [n for n in order if n in items] + sorted(n for n in items if n not in order)
+        return "".join(' %s="%s"' % (n, xml.sax.saxutils.escape(str(items[n]), {'"': '&quot;'})) for n in names)
+
+    def opf_element_line(self, elem, order=()):
+        tag = self.opf_tag_name(elem)
+        attrs = self.opf_attrs(elem, order)
+        text = elem.text or ""
+        if len(elem) == 0 and text == "":
+            return "<%s%s/>" % (tag, attrs)
+        if len(elem) == 0:
+            return "<%s%s>%s</%s>" % (tag, attrs, xml.sax.saxutils.escape(str(text)), tag)
+        return etree.tostring(elem, encoding="unicode", pretty_print=True).strip()
+
+    def serialize_opf_metadata(self, metadata):
+        children = list(metadata)
+        consumed = set()
+
+        def take(pred):
+            result = []
+            for i, child in enumerate(children):
+                if i not in consumed and pred(child):
+                    consumed.add(i)
+                    result.append((i, child))
+            return result
+
+        title_items = take(lambda e: e.tag == qname(DC_NS_URI, "title"))
+        title_refines = take(lambda e: e.tag == "meta" and e.get("refines") == "#title")
+        creator_items = []
+        for i, child in enumerate(children):
+            if i in consumed or child.tag != qname(DC_NS_URI, "creator"):
+                continue
+            consumed.add(i)
+            block = [child]
+            creator_id = child.get("id")
+            if creator_id:
+                for j, meta in enumerate(children):
+                    if j not in consumed and meta.tag == "meta" and meta.get("refines") == "#" + creator_id:
+                        consumed.add(j)
+                        block.append(meta)
+            creator_items.append(block)
+
+        publisher_items = take(lambda e: e.tag == qname(DC_NS_URI, "publisher"))
+        language_items = take(lambda e: e.tag == qname(DC_NS_URI, "language"))
+        identifier_items = take(lambda e: e.tag == qname(DC_NS_URI, "identifier"))
+        modified_items = take(lambda e: e.tag == "meta" and e.get("property") == "dcterms:modified")
+        etc_items = [(i, e) for i, e in enumerate(children) if i not in consumed]
+
+        lines = ['<metadata xmlns:dc="%s">' % DC_NS_URI, ""]
+
+        if title_items:
+            lines.extend(["<!-- 作品名 -->"])
+            lines.extend(self.opf_element_line(e, ("id",)) for i, e in title_items)
+            lines.extend(self.opf_element_line(e, ("refines", "property", "scheme")) for i, e in title_refines)
+            lines.append("")
+
+        if creator_items:
+            lines.extend(["<!-- 著者名 -->"])
+            for block_index, block in enumerate(creator_items):
+                if block_index:
+                    lines.append("")
+                for elem in block:
+                    lines.append(self.opf_element_line(elem, ("id", "refines", "property", "scheme")))
+            lines.append("")
+
+        if publisher_items:
+            lines.extend(["<!-- 出版社名 -->"])
+            lines.extend(self.opf_element_line(e, ("id",)) for i, e in publisher_items)
+            lines.append("")
+
+        if language_items:
+            lines.extend(["<!-- 言語 -->"])
+            lines.extend(self.opf_element_line(e) for i, e in language_items)
+            lines.append("")
+
+        if identifier_items:
+            lines.extend(["<!-- ファイルid -->"])
+            lines.extend(self.opf_element_line(e, ("id", "opf:scheme")) for i, e in identifier_items)
+            lines.append("")
+
+        if modified_items:
+            lines.extend(["<!-- 更新日 -->"])
+            lines.extend(self.opf_element_line(e, ("property",)) for i, e in modified_items)
+            lines.append("")
+
+        if etc_items:
+            lines.extend(["<!-- etc. -->"])
+            lines.extend(self.opf_element_line(e, ("name", "content", "property", "refines", "scheme")) for i, e in etc_items)
+            lines.append("")
+
+        lines.append("</metadata>")
+        return "\n".join(lines)
+
+    def opf_manifest_category(self, item):
+        href = item.get("href", "")
+        if item.get("properties") == "nav" or href.startswith("navigation-documents"):
+            return "navigation"
+        if href.startswith("style/"):
+            return "style"
+        if href.startswith("image/"):
+            return "image"
+        if href.startswith("xhtml/"):
+            return "xhtml"
+        if href.startswith("fonts/"):
+            return "font"
+        return "misc"
+
+    def serialize_opf_manifest(self, manifest):
+        groups = collections.OrderedDict((name, []) for name in ["navigation", "style", "image", "xhtml", "font", "misc"])
+        for item in manifest:
+            groups[self.opf_manifest_category(item)].append(item)
+
+        lines = ["<manifest>", ""]
+        for category, items in groups.items():
+            if not items:
+                continue
+            lines.append("<!-- %s -->" % category)
+            lines.extend(self.opf_element_line(item, ("media-type", "id", "href", "properties")) for item in items)
+            lines.append("")
+        lines.append("</manifest>")
+        return "\n".join(lines)
+
+    def serialize_opf_spine(self, spine):
+        attrs = self.opf_attrs(spine, ("toc", "page-progression-direction"))
+        lines = ["<spine%s>" % attrs, ""]
+        lines.extend(self.opf_element_line(itemref, ("idref", "linear", "properties")) for itemref in spine)
+        lines.extend(["", "</spine>"])
+        return "\n".join(lines)
+
+    def serialize_standard_opf(self, package):
+        metadata = package.find("metadata")
+        manifest = package.find("manifest")
+        spine = package.find("spine")
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<package']
+        lines.append(' xmlns="%s"' % OPF_NS_URI)
+        lines.append(' version="%s"' % package.get("version", "3.0"))
+        xml_lang = package.get(XML_LANG)
+        if xml_lang:
+            lines.append(' xml:lang="%s"' % xml.sax.saxutils.escape(xml_lang, {'"': '&quot;'}))
+        lines.append(' unique-identifier="%s"' % package.get("unique-identifier", "ASIN"))
+        prefix_value = package.get("prefix")
+        if prefix_value:
+            prefix_lines = prefix_value.split("\n")
+            lines.append(' prefix="%s' % xml.sax.saxutils.escape(prefix_lines[0], {'"': '&quot;'}))
+            for pfx in prefix_lines[1:]:
+                lines.append('         %s' % xml.sax.saxutils.escape(pfx, {'"': '&quot;'}))
+            lines[-1] += '"'
+        lines.extend([">", ""])
+        lines.append(self.serialize_opf_metadata(metadata))
+        lines.append("")
+        lines.append(self.serialize_opf_manifest(manifest))
+        lines.append("")
+        lines.append(self.serialize_opf_spine(spine))
+        lines.append("")
+        lines.append("</package>")
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
     def create_opf(self):
 
         def add_metadata_meta_name_content(name, content):
@@ -1413,6 +1599,8 @@ class EPUB_Output(object):
         }
         package = etree.Element(qname(OPF_NS_URI, "package"), nsmap=OPF_NAMESPACES, attrib={
             "version": ("2.0" if self.generate_epub2 else "3.0"), "unique-identifier": "ASIN"})
+        if not self.generate_epub2:
+            package.set(XML_LANG, self.language if self.language else "ja")
 
         metadata = etree.SubElement(package, "metadata")
 
@@ -1422,10 +1610,9 @@ class EPUB_Output(object):
         if self.uid.startswith("urn:uuid:") and self.generate_epub2:
             identifier.set(qname(ALT_OPF_NS_URI, "scheme"), "uuid")
 
-        title = etree.SubElement(metadata, qname(DC_NS_URI, "title"))
+        title = etree.SubElement(metadata, qname(DC_NS_URI, "title"), attrib={"id": "title"})
         title.text = self.title
         if self.title_pronunciation and not self.generate_epub2:
-            title.set("id", "title")
             add_metadata_meta_refines_property("#title", "file-as", self.title_pronunciation)
 
         for i, author in enumerate(self.authors):
@@ -1433,7 +1620,7 @@ class EPUB_Output(object):
             creator.text = author
 
             if not self.generate_epub2:
-                author_id = "creator%d" % i
+                author_id = "creator%02d" % (i + 1)
                 creator.set("id", author_id)
 
                 add_metadata_meta_refines_property("#" + author_id, "role", "aut", prefix("marc:relators"))
@@ -1447,7 +1634,7 @@ class EPUB_Output(object):
         language.text = self.language if self.language else "en"
 
         if self.publisher:
-            publisher = etree.SubElement(metadata, qname(DC_NS_URI, "publisher"))
+            publisher = etree.SubElement(metadata, qname(DC_NS_URI, "publisher"), attrib={"id": "publisher"})
             publisher.text = self.publisher
 
         if self.pubdate:
@@ -1472,6 +1659,8 @@ class EPUB_Output(object):
 
         if not self.generate_epub2:
             add_metadata_meta_property("dcterms:modified", datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z")
+            add_metadata_meta_property("ebpaj:guide-version", "1.1.4")
+            add_metadata_meta_property("dpfj:guide-version", "1.1.4")
 
         if self.fixed_layout:
             if not self.generate_epub2:
@@ -1549,8 +1738,17 @@ class EPUB_Output(object):
             etree.SubElement(x_metadata, "output", attrib={
                 "content-type": "application/x-mobipocket-subscription-magazine", "encoding": "utf-8"})
 
-        if used_prefixes:
-            package.set("prefix", " ".join(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p]) for p in sorted(list(used_prefixes))]))
+        ebpaj_prefixes = collections.OrderedDict([
+            ("ebpaj", "http://www.ebpaj.jp/"),
+            ("dpfj", "https://www.dpfj.or.jp/"),
+            ])
+        for pfx, uri in ebpaj_prefixes.items():
+            if pfx in used_prefixes:
+                used_prefixes.discard(pfx)
+        prefix_items = ["%s: %s" % item for item in ebpaj_prefixes.items()]
+        prefix_items.extend(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p]) for p in sorted(list(used_prefixes))])
+        if prefix_items and not self.generate_epub2:
+            package.set("prefix", "\n".join(prefix_items))
 
         man = etree.SubElement(package, "manifest")
         toc_idref = None
@@ -1628,8 +1826,11 @@ class EPUB_Output(object):
 
         etree.cleanup_namespaces(package)
 
-        data = etree.tostring(package, encoding="utf-8", pretty_print=True, xml_declaration=True)
-        data = data.replace(ALT_OPF_NS_URI.encode("utf-8"), OPF_NS_URI.encode("utf-8"))
+        if self.generate_epub2:
+            data = etree.tostring(package, encoding="utf-8", pretty_print=True, xml_declaration=True)
+            data = data.replace(ALT_OPF_NS_URI.encode("utf-8"), OPF_NS_URI.encode("utf-8"))
+        else:
+            data = self.serialize_standard_opf(package)
 
         self.add_oebps_file(self.OPF_FILEPATH, data, "application/oebps-package+xml")
 
