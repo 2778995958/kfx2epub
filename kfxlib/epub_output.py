@@ -1119,6 +1119,132 @@ class EPUB_Output(object):
         has_image = body.find(".//img") is not None or body.find(".//%s" % SVG) is not None
         return has_image
 
+    def fixed_layout_viewport_size(self, head):
+        for meta in head.findall("meta"):
+            if meta.get("name") != "viewport":
+                continue
+
+            content = meta.get("content", "")
+            mw = re.search("width=([0-9]+)", content)
+            mh = re.search("height=([0-9]+)", content)
+            if mw and mh:
+                return int(mw.group(1)), int(mh.group(1))
+
+        return None, None
+
+    def fixed_layout_image_file_size(self, src, ref_from):
+        filename = get_url_filename(urlabspath(src, ref_from=ref_from))
+        filename = remove_url_fragment(filename or "")
+        image_file = self.oebps_files.get(filename)
+        if image_file is not None and image_file.width and image_file.height:
+            return image_file.width, image_file.height
+
+        return None, None
+
+    def fixed_layout_length(self, value):
+        if value is None:
+            return None
+
+        match = re.match(r"^([0-9]+)(?:px)?$", str(value).strip())
+        if match:
+            return int(match.group(1))
+
+        return None
+
+    def fixed_layout_svg_viewbox_size(self, svg):
+        match = re.match(r"^\s*0\s+0\s+([0-9]+)\s+([0-9]+)\s*$", svg.get("viewBox", ""))
+        if match:
+            return int(match.group(1)), int(match.group(2))
+
+        return None, None
+
+    def extract_single_fixed_layout_image(self, book_part, body):
+        image_sources = []
+
+        for img in body.findall(".//img"):
+            src = img.get("src")
+            if not src:
+                continue
+
+            width = self.fixed_layout_length(img.get("width"))
+            height = self.fixed_layout_length(img.get("height"))
+            if width is None or height is None:
+                width, height = self.fixed_layout_image_file_size(src, book_part.filename)
+            image_sources.append((src, width, height))
+
+        for svg in body.findall(".//%s" % SVG):
+            viewbox_width, viewbox_height = self.fixed_layout_svg_viewbox_size(svg)
+            for image in svg.findall(".//%s" % qname(SVG_NS_URI, "image")):
+                src = image.get(XLINK_HREF) or image.get("href")
+                if not src:
+                    continue
+
+                width = self.fixed_layout_length(image.get("width")) or viewbox_width
+                height = self.fixed_layout_length(image.get("height")) or viewbox_height
+                if width is None or height is None:
+                    width, height = self.fixed_layout_image_file_size(src, book_part.filename)
+                image_sources.append((src, width, height))
+
+        if len(image_sources) != 1:
+            log.warning("Fixed-layout page %s has %d image sources; keeping original XHTML" % (book_part.filename, len(image_sources)))
+            return None, None, None
+
+        return image_sources[0]
+
+    def order_fixed_layout_head(self, book_part, head):
+        self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
+        fixed_layout_href = urlrelpath(self.FIXED_LAYOUT_CSS_FILEPATH, ref_from=book_part.filename)
+
+        charset_meta = next((meta for meta in head.findall("meta") if meta.get("charset") is not None), None)
+        title = head.find("title")
+        fixed_layout_link = next((link for link in head.findall("link") if link.get("rel") == "stylesheet" and link.get("href") == fixed_layout_href), None)
+        viewport_meta = next((meta for meta in head.findall("meta") if meta.get("name") == "viewport"), None)
+
+        ordered = [e for e in [charset_meta, title, fixed_layout_link, viewport_meta] if e is not None]
+        for elem in ordered:
+            head.remove(elem)
+
+        for index, elem in enumerate(ordered):
+            head.insert(index, elem)
+
+    def convert_to_fixed_layout_svg_page(self, book_part, head, body):
+        src, image_width, image_height = self.extract_single_fixed_layout_image(book_part, body)
+        if not src:
+            return
+
+        viewport_width, viewport_height = self.fixed_layout_viewport_size(head)
+        width = viewport_width or image_width or self.original_width
+        height = viewport_height or image_height or self.original_height
+        if not width or not height:
+            log.warning("Fixed-layout page %s has no usable viewport or image size; keeping original XHTML" % book_part.filename)
+            return
+
+        self.order_fixed_layout_head(book_part, head)
+
+        body.clear()
+        if book_part.is_cover_page:
+            body.set(EPUB_TYPE, "cover")
+        body.text = "\n"
+
+        main = etree.SubElement(body, "div")
+        main.set("class", "main")
+        main.text = "\n\n"
+        main.tail = "\n"
+
+        svg = etree.SubElement(main, SVG, nsmap=SVG_NAMESPACES)
+        svg.set("version", "1.1")
+        svg.set("width", "100%")
+        svg.set("height", "100%")
+        svg.set("viewBox", "0 0 %d %d" % (width, height))
+        svg.text = "\n"
+        svg.tail = "\n\n"
+
+        image = etree.SubElement(svg, qname(SVG_NS_URI, "image"))
+        image.set("width", "%d" % width)
+        image.set("height", "%d" % height)
+        image.set(XLINK_HREF, src)
+        image.tail = "\n"
+
     def ensure_main_wrapper(self, body):
         # ebpaj reflowable pages use a single body > div.main container.
         if len(body) == 1 and body[0].tag == "div" and "main" in body[0].get("class", "").split():
@@ -1202,7 +1328,9 @@ class EPUB_Output(object):
         existing = book_part.html.get("class", "").split()
         existing = [c for c in existing if c not in ("vrtl", "hltr", "vltr", "hrtl")]
 
-        if not book_part.is_fxl:
+        if book_part.is_fxl:
+            self.convert_to_fixed_layout_svg_page(book_part, head, body)
+        else:
             image_only = self.is_image_only_body(body)
 
             if image_only:
@@ -1222,10 +1350,17 @@ class EPUB_Output(object):
     def format_xhtml_document_header(self, html_str):
         declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
         html_str = declaration + html_str
+        html_str = html_str.replace(b"\n class=", b" class=")
         html_str = html_str.replace(b"<html ", b"<html\n ", 1)
         html_str = html_str.replace(b'" xmlns:epub=', b'"\n xmlns:epub=', 1)
         html_str = html_str.replace(b'" xml:lang=', b'"\n xml:lang=', 1)
-        html_str = html_str.replace(b'" class=', b'"\n class=', 1)
+
+        html_tag_end = html_str.find(b">\n<head>")
+        if html_tag_end >= 0:
+            html_tag = html_str[:html_tag_end]
+            html_tag = html_tag.replace(b'" class=', b'"\n class=', 1)
+            html_str = html_tag + html_str[html_tag_end:]
+
         html_str = html_str.replace(b'">\n<head>', b'"\n>\n<head>', 1)
         html_str = html_str.replace(b"</head>\n<body", b"</head>\n\n<body", 1)
         return html_str
