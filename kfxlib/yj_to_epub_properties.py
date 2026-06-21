@@ -2,6 +2,7 @@ import collections
 import decimal
 import functools
 from lxml import etree
+import os
 import re
 
 from .epub_output import (EPUB_NS_URI, EPUB_TYPE, IDX_ENTRY, MATH, qname, split_value, SVG, XML_LANG, XML_NS_URI, value_str)
@@ -20,6 +21,14 @@ EMIT_OEB_PAGE_PROPS = False
 DETECT_LAYOUT_ENHANCER = False
 FIX_PT_TO_PX = True
 REMOVE_EMPTY_NAMED_CLASSES = True
+
+EMIT_WEBKIT_EQUIVALENTS = False
+
+# Properties already supplied by the bundled ebpaj style-reset.css, redundant when emitted on a class.
+# margin-*:0 is the reset default for div/p/h1-6 (non-inherited); text-align:justify is the reset
+# default inherited from body (only strip when no ancestor overrides text-align).
+RESET_DEFAULT_MARGIN_TAGS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6"}
+RESET_DEFAULT_FONT_FAMILIES = {"JA,serif", "V,JA,serif", "serif-ja,serif", "serif-ja, serif"}
 
 REVERSE_INHERITANCE = True
 REVERSE_INHERITANCE_FRACTION = 0.8
@@ -1036,86 +1045,18 @@ NON_HERITABLE_DEFAULT_PROPERTIES = {
     }
 
 
-RESET_CSS_DATA = """@charset "UTF-8";
-body {
-  margin:         0;
-  padding:        0;
-  font-size:      100%;
-  vertical-align: baseline;
-  line-height:    1.75;
-  background:     transparent;
+BUNDLED_STYLES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "styles")
 
-  word-spacing:   normal;
-  letter-spacing: normal;
-  white-space:    normal;
-  word-wrap:      break-word;
-  text-align:     justify;
-
-  -webkit-line-break: normal;
-  -epub-line-break:   normal;
-
-  -webkit-word-break: normal;
-  -epub-word-break:   normal;
-
-  -webkit-hyphens: auto;
-  -epub-hyphens:   auto;
-
-  -webkit-text-underline-position: under left;
-  -epub-text-underline-position:   under left;
-}
-div,p {
-  display: block;
-  width:   auto;
-  height:  auto;
-  margin:  0;
-  padding: 0;
-}
-body,div,p {
-  text-indent: 0;
-}
-body > p,
-div  > p {
-  text-indent: inherit;
-}
-h1,h2,h3,h4,h5,h6 {
-  display:     block;
-  margin:      0;
-  padding:     0;
-  font-size:   100%;
-  font-weight: inherit;
-  background:  transparent;
-}
-img {
-  width:          auto;
-  height:         auto;
-  margin:         0;
-  padding:        0;
-  border:         none;
-  vertical-align: baseline;
-  background:     transparent;
-}
-a {
-  font-style:      inherit;
-  font-weight:     inherit;
-  text-decoration: inherit;
-  color:           inherit;
-  background:      transparent;
-}
-"""
+_bundled_style_cache = {}
 
 
-FIXED_LAYOUT_CSS_DATA = (
-    "@charset \"UTF-8\";\n\n" +
-    "html,\n" +
-    "body {\n" +
-    "  margin:    0;\n" +
-    "  padding:   0;\n" +
-    "  font-size: 0;\n" +
-    "}\n" +
-    "svg {\n" +
-    "  margin:    0;\n" +
-    "  padding:   0;\n" +
-    "}\n")
+def read_bundled_style(filename):
+    if filename not in _bundled_style_cache:
+        path = os.path.join(BUNDLED_STYLES_DIR, filename)
+        with open(path, "rb") as f:
+            _bundled_style_cache[filename] = f.read()
+
+    return _bundled_style_cache[filename]
 
 
 AMAZON_SPECIAL_CLASSES = [
@@ -1452,7 +1393,7 @@ class KFX_EPUB_Properties(object):
                 value not in ["100", "-100"]):
             log.error("Property %s has disallowed value: %s" % (yj_property_name, value))
 
-        if yj_property_name in {"$32", "$33"} and value == "0em":
+        if yj_property_name in {"$32", "$33"} and value in {"0em", "0"}:
             value = "normal"
 
         return value
@@ -1576,6 +1517,9 @@ class KFX_EPUB_Properties(object):
                         self.set_style(e, style)
 
                 if "style" in e.attrib:
+                    self.strip_reset_default_properties(e)
+
+                if "style" in e.attrib:
                     style_counts[e.get("style")] += 1
 
         sorted_style_data = []
@@ -1641,6 +1585,8 @@ class KFX_EPUB_Properties(object):
                             "-kfx-media-query" not in class_style):
                         e.set("style", class_style.tostring())
                         self.inventory_style(class_style)
+                    elif len(class_style) == 0 and class_name not in selector_classes:
+                        e.attrib.pop("style", None)
                     else:
                         self.add_class(e, class_name, before=True)
                         referenced_classes.add(class_name)
@@ -1738,6 +1684,8 @@ class KFX_EPUB_Properties(object):
 
                 if "writing-mode" not in body_sty:
                     body_sty["writing-mode"] = self.writing_mode
+
+                book_part.writing_mode_value = body_sty.get("writing-mode")
 
                 self.set_style(body, body_sty)
 
@@ -2059,6 +2007,8 @@ class KFX_EPUB_Properties(object):
         for name, val in list(sty.items()):
             alt_name = ALTERNATE_EQUIVALENT_PROPERTIES.get(name)
             if alt_name is not None:
+                if not (EMIT_WEBKIT_EQUIVALENTS or self.generate_epub2 or self.GENERATE_EPUB2_COMPATIBLE):
+                    continue
                 if name == "text-combine-upright" and val == "all":
                     sty[alt_name] = "horizontal"
                 else:
@@ -2287,6 +2237,69 @@ class KFX_EPUB_Properties(object):
 
             elem.set("class", " ".join(classes))
 
+    def strip_reset_default_properties(self, elem):
+        style = self.get_style(elem)
+        modified = False
+
+        if elem.tag in RESET_DEFAULT_MARGIN_TAGS:
+            for name in ["margin-left", "margin-right", "margin-top", "margin-bottom"]:
+                if style.get(name) == "0":
+                    style.pop(name)
+                    modified = True
+
+        if style.get("text-align") == "justify" and not self.ancestor_overrides_text_align(elem):
+            style.pop("text-align")
+            modified = True
+
+        if style.get("font-family") in RESET_DEFAULT_FONT_FAMILIES and not self.ancestor_overrides_font_family(elem):
+            style.pop("font-family")
+            modified = True
+
+        if style.get("hyphens") == "auto" and not self.ancestor_overrides_property(elem, "hyphens", "auto"):
+            style.pop("hyphens")
+            modified = True
+
+        if style.get("line-break") == "normal" and not self.ancestor_overrides_property(elem, "line-break", "normal"):
+            style.pop("line-break")
+            modified = True
+
+        if elem.tag == "body" and style.get("writing-mode") == "vertical-rl":
+            style.pop("writing-mode")
+            modified = True
+
+        if modified:
+            self.set_style(elem, style)
+
+    def ancestor_overrides_text_align(self, elem):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            ta = self.Style(parent.get("style", "")).get("text-align")
+            if ta is not None:
+                return ta != "justify"
+            parent = parent.getparent()
+
+        return False
+
+    def ancestor_overrides_property(self, elem, property_name, reset_value):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            value = self.Style(parent.get("style", "")).get(property_name)
+            if value is not None:
+                return value != reset_value
+            parent = parent.getparent()
+
+        return False
+
+    def ancestor_overrides_font_family(self, elem):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            font_family = self.Style(parent.get("style", "")).get("font-family")
+            if font_family is not None:
+                return font_family not in RESET_DEFAULT_FONT_FAMILIES
+            parent = parent.getparent()
+
+        return False
+
     def get_style(self, elem, remove=False):
         return self.Style(elem.attrib.pop("style", "") if remove else elem.get("style", ""))
 
@@ -2314,7 +2327,116 @@ class KFX_EPUB_Properties(object):
 
             self.set_style(elem, new_style)
 
+    def used_html_classes(self):
+        classes = set()
+        for book_part in self.book_parts:
+            for elem in book_part.html.iter("*"):
+                classes.update(elem.get("class", "").split())
+
+        return classes
+
+    def css_selector_is_used(self, selector, used_classes):
+        selectors = [s.strip() for s in selector.split(",")]
+        for sel in selectors:
+            if not sel.startswith("."):
+                return True
+
+            class_match = re.match(r"\.([A-Za-z0-9_-]+)(?:$|[\s:\.\[#])", sel)
+            if class_match is None or class_match.group(1) in used_classes:
+                return True
+
+        return False
+
+    def prune_unused_css_rules(self):
+        used_classes = self.used_html_classes()
+        self.css_rules = dict((selector, style) for selector, style in self.css_rules.items()
+                              if self.css_selector_is_used(selector, used_classes))
+
+        for mq in list(self.media_queries.keys()):
+            css_rules = self.media_queries[mq]
+            self.media_queries[mq] = dict((selector, style) for selector, style in css_rules.items()
+                                          if self.css_selector_is_used(selector, used_classes))
+            if not self.media_queries[mq]:
+                self.media_queries.pop(mq)
+
+    def generated_class_style(self, elem):
+        style = self.Style({})
+        for class_name in elem.get("class", "").split():
+            class_style = self.css_rules.get(class_selector(class_name))
+            if class_style is None:
+                return None
+            style.update(class_style, replace=True)
+
+        return style
+
+    def normalize_tcy_spans(self):
+        for book_part in self.book_parts:
+            for span in book_part.body().iter("span"):
+                class_style = self.generated_class_style(span)
+                if class_style is None:
+                    continue
+
+                if dict(class_style.items()) == {"text-combine-upright": "all"}:
+                    span.set("class", "tcy")
+
+    def normalize_fit_image_wrappers(self):
+        for book_part in self.book_parts:
+            for div in list(book_part.body().iter("div")):
+                if div.text or len(div) != 1:
+                    continue
+
+                img = div[0]
+                if img.tag != "img" or img.tail:
+                    continue
+
+                div_style = self.generated_class_style(div)
+                img_style = self.generated_class_style(img)
+                if div_style is None or img_style is None:
+                    continue
+
+                if dict(div_style.items()) != {"page-break-inside": "avoid"}:
+                    continue
+
+                allowed_img_style = {
+                    "height": {"100%", "auto"},
+                    "max-height": {"100%"},
+                    "max-width": {"100%"},
+                    "width": {"100%", "auto"},
+                    }
+                if any(value not in allowed_img_style.get(name, set()) for name, value in img_style.items()):
+                    continue
+
+                div.tag = "p"
+                div.attrib.pop("class", None)
+                div.attrib.pop("style", None)
+                img.set("class", "fit")
+                img.attrib.pop("style", None)
+
+    def kfx_style_css_data(self):
+        css_lines = ["@charset \"UTF-8\";"]
+
+        if self.font_faces:
+            css_lines.extend(["@font-face {%s}" % ff.tostring() for ff in sorted(self.font_faces)])
+
+        if self.css_rules:
+            css_lines.extend(merge_css_rules(self.css_rules))
+
+        for mq, css_rules in sorted(self.media_queries.items()):
+            css_lines.append("@media %s {" % mq)
+            css_lines.extend(["    %s" % line for line in merge_css_rules(css_rules)])
+            css_lines.append("}")
+
+        return "\n".join(css_lines).encode("utf-8")
+
+    def refresh_book_style_css(self):
+        if self.KFX_CSS_FILEPATH not in self.oebps_files:
+            return
+
+        self.prune_unused_css_rules()
+        self.add_oebps_file(self.KFX_CSS_FILEPATH, self.kfx_style_css_data(), "text/css")
+
     def create_css_files(self):
+        self.prune_unused_css_rules()
         linked_css_files = set()
 
         for book_part in self.book_parts:
@@ -2324,27 +2446,22 @@ class KFX_EPUB_Properties(object):
 
         for css_file in sorted(linked_css_files):
             if css_file == self.FIXED_LAYOUT_CSS_FILEPATH:
-                self.manifest_resource(self.FIXED_LAYOUT_CSS_FILEPATH, data=FIXED_LAYOUT_CSS_DATA.encode("utf-8"), mimetype="text/css")
+                self.manifest_resource(
+                    self.FIXED_LAYOUT_CSS_FILEPATH, data=read_bundled_style("fixed-layout-jp.css"), mimetype="text/css")
 
             elif css_file == self.STYLES_CSS_FILEPATH:
-                self.manifest_resource(self.RESET_CSS_FILEPATH, data=RESET_CSS_DATA.encode("utf-8"), mimetype="text/css")
-
-                css_lines = ["@charset \"UTF-8\";", "@import \"style-reset.css\";"]
-
-                if self.font_faces:
-                    css_lines.extend(["@font-face {%s}" % ff.tostring() for ff in sorted(self.font_faces)])
-
-                if self.css_rules:
-                    css_lines.extend(["%s {%s}" % (cn, self.css_rules[cn]) for cn in sorted(
-                                self.css_rules.keys(), key=natural_sort_key)])
-
-                for mq, css_rules in sorted(self.media_queries.items()):
-                    css_lines.append("@media %s {" % mq)
-                    css_lines.extend(["    %s {%s}" % (cn, css_rules[cn]) for cn in sorted(css_rules.keys(), key=natural_sort_key)])
-                    css_lines.append("}")
-
                 self.manifest_resource(
-                    self.STYLES_CSS_FILEPATH, data="\n".join(css_lines).encode("utf-8"), mimetype="text/css")
+                    self.RESET_CSS_FILEPATH, data=read_bundled_style("style-reset.css"), mimetype="text/css")
+                self.manifest_resource(
+                    self.STANDARD_CSS_FILEPATH, data=read_bundled_style("style-standard.css"), mimetype="text/css")
+                self.manifest_resource(
+                    self.ADVANCE_CSS_FILEPATH, data=read_bundled_style("style-advance.css"), mimetype="text/css")
+                self.manifest_resource(
+                    self.CHECK_CSS_FILEPATH, data=read_bundled_style("style-check.css"), mimetype="text/css")
+                self.manifest_resource(
+                    self.STYLES_CSS_FILEPATH, data=read_bundled_style("book-style.css"), mimetype="text/css")
+                self.manifest_resource(
+                    self.KFX_CSS_FILEPATH, data=self.kfx_style_css_data(), mimetype="text/css")
 
     def quote_font_name(self, value):
         for ident in value.split(" "):
@@ -2565,3 +2682,13 @@ def capitalize_font_name(name):
 
 def class_selector(class_name):
     return "." + class_name
+
+
+def merge_css_rules(css_rules):
+    selectors_by_body = collections.OrderedDict()
+
+    for selector in sorted(css_rules.keys(), key=natural_sort_key):
+        body = str(css_rules[selector])
+        selectors_by_body.setdefault(body, []).append(selector)
+
+    return ["%s {%s}" % (", ".join(selectors), body) for body, selectors in selectors_by_body.items()]

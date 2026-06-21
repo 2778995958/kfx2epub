@@ -168,6 +168,7 @@ class BookPart(OPFProperties):
 
         self.is_cover_page = False
         self.nmdl_template_id = None
+        self.writing_mode_value = None
 
     def head(self):
         head = self.html.find("head")
@@ -252,7 +253,11 @@ class EPUB_Output(object):
     IMAGE_FILEPATH = "/%s"
     PDF_FILEPATH = "/%s"
     STYLES_CSS_FILEPATH = "/book-style.css"
+    KFX_CSS_FILEPATH = "/style-kfx.css"
     RESET_CSS_FILEPATH = "/style-reset.css"
+    STANDARD_CSS_FILEPATH = "/style-standard.css"
+    ADVANCE_CSS_FILEPATH = "/style-advance.css"
+    CHECK_CSS_FILEPATH = "/style-check.css"
     FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout-jp.css"
     LAYOUT_CSS_FILEPATH = "/layout%04d.css"
 
@@ -268,7 +273,11 @@ class EPUB_Output(object):
         IMAGE_FILEPATH = "/image" + IMAGE_FILEPATH
         PDF_FILEPATH = "/misc" + PDF_FILEPATH
         STYLES_CSS_FILEPATH = "/style" + STYLES_CSS_FILEPATH
+        KFX_CSS_FILEPATH = "/style" + KFX_CSS_FILEPATH
         RESET_CSS_FILEPATH = "/style" + RESET_CSS_FILEPATH
+        STANDARD_CSS_FILEPATH = "/style" + STANDARD_CSS_FILEPATH
+        ADVANCE_CSS_FILEPATH = "/style" + ADVANCE_CSS_FILEPATH
+        CHECK_CSS_FILEPATH = "/style" + CHECK_CSS_FILEPATH
         FIXED_LAYOUT_CSS_FILEPATH = "/style" + FIXED_LAYOUT_CSS_FILEPATH
         LAYOUT_CSS_FILEPATH = "/style" + LAYOUT_CSS_FILEPATH
 
@@ -288,6 +297,7 @@ class EPUB_Output(object):
         self.css_files = set()
         self.pagemap = []
         self.dom_image_filenames = set()
+        self.original_dom_image_roles = {}
 
         self.asin = ""
         self.book_id = ""
@@ -772,7 +782,8 @@ class EPUB_Output(object):
                     continue
 
                 seen_filenames.add(filename)
-                role_counts["illustration" if self.is_illustration_image(elem) else "page"] += 1
+                role = self.dom_image_role(elem, filename)
+                role_counts[role] += 1
 
         self.illustration_image_sequence_width = max(3, len(str(role_counts["illustration"] or 0)))
         self.page_image_sequence_width = max(3, len(str(role_counts["page"] or 0)))
@@ -790,7 +801,7 @@ class EPUB_Output(object):
 
             new_filename = self.rename_image_file(
                 filename,
-                "illustration" if self.is_illustration_image(elem) else "page")
+                self.dom_image_role(elem, filename))
             if new_filename:
                 self.dom_image_filenames.add(filename)
                 self.dom_image_filenames.add(new_filename)
@@ -804,6 +815,21 @@ class EPUB_Output(object):
 
         return None
 
+    def original_image_role(self, elem):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            if parent.tag == "div" and "main" not in parent.get("class", "").split():
+                return "illustration"
+            parent = parent.getparent()
+
+        return "page"
+
+    def dom_image_role(self, elem, filename):
+        if elem.tag == "img" and "fit" in elem.get("class", "").split():
+            return "illustration"
+
+        return self.original_dom_image_roles.get(filename) or self.original_image_role(elem)
+
     def is_cover_image_filename(self, filename):
         manifest_entry = self.manifest_files.get(remove_url_fragment(filename))
         return manifest_entry is not None and manifest_entry.is_cover_image
@@ -811,7 +837,7 @@ class EPUB_Output(object):
     def is_illustration_image(self, elem):
         parent = elem.getparent()
         while parent is not None and parent.tag != "body":
-            if parent.tag == "div":
+            if parent.tag == "div" and "main" not in parent.get("class", "").split():
                 return True
             parent = parent.getparent()
 
@@ -1054,6 +1080,112 @@ class EPUB_Output(object):
                         self.generate_epub2 = False
                         return
 
+    TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th", "dt", "dd", "blockquote", "nav"}
+
+    def is_image_only_body(self, body):
+        has_text_block = any(body.find(".//%s" % tag) is not None for tag in self.TEXT_BLOCK_TAGS)
+        if has_text_block:
+            return False
+
+        has_image = body.find(".//img") is not None or body.find(".//%s" % SVG) is not None
+        return has_image
+
+    def ensure_main_wrapper(self, body):
+        # ebpaj reflowable pages use a single body > div.main container.
+        if len(body) == 1 and body[0].tag == "div" and "main" in body[0].get("class", "").split():
+            return
+
+        main = etree.Element("div")
+        main.set("class", "main")
+        main.text = (body.text or "") + "\n"
+        body.text = None
+
+        for child in list(body):
+            body.remove(child)
+            main.append(child)
+            if not child.tail:
+                child.tail = "\n"
+
+        main.tail = "\n"
+        body.append(main)
+
+    def convert_to_fit_image_page(self, book_part):
+        # ebpaj single-image page: <body class="p-image"><div class="main"><p><img class="fit"/></p>
+        body = book_part.body()
+        image_sources = []
+
+        for img in body.findall(".//img"):
+            src = img.get("src")
+            if src:
+                filename = get_url_filename(urlabspath(src, ref_from=book_part.filename))
+                filename = remove_url_fragment(filename or "")
+                if filename:
+                    self.original_dom_image_roles.setdefault(filename, self.original_image_role(img))
+                image_sources.append((src, img.get("alt", "")))
+
+        for svg in body.findall(".//%s" % SVG):
+            for image in svg.findall(".//%s" % qname(SVG_NS_URI, "image")):
+                src = image.get(XLINK_HREF) or image.get("href")
+                if src:
+                    filename = get_url_filename(urlabspath(src, ref_from=book_part.filename))
+                    filename = remove_url_fragment(filename or "")
+                    if filename:
+                        self.original_dom_image_roles.setdefault(filename, self.original_image_role(svg))
+                    image_sources.append((src, ""))
+
+        if not image_sources:
+            return
+
+        body.clear()
+        body.set("class", "p-image")
+        body.text = "\n"
+        main = etree.SubElement(body, "div")
+        main.set("class", "main")
+        main.text = "\n"
+        main.tail = "\n"
+
+        for src, alt in image_sources:
+            p = etree.SubElement(main, "p")
+            p.tail = "\n"
+            img = etree.SubElement(p, "img", attrib={"class": "fit", "src": src, "alt": alt})
+
+    def finalize_xhtml_structure(self, book_part, head, body):
+        # B2: prepend <meta charset="UTF-8"/> and order head as meta -> title -> link
+        for meta in head.findall("meta"):
+            if meta.get("charset") is not None:
+                head.remove(meta)
+
+        charset_meta = etree.Element("meta")
+        charset_meta.set("charset", "UTF-8")
+        head.insert(0, charset_meta)
+
+        title = head.find("title")
+        if title is not None:
+            head.remove(title)
+            head.insert(1, title)
+
+        # Direction class on <html>. Fixed-layout pages follow the ebpaj FXL template (no class, viewport governs).
+        existing = book_part.html.get("class", "").split()
+        existing = [c for c in existing if c not in ("vrtl", "hltr", "vltr", "hrtl")]
+
+        if not book_part.is_fxl:
+            image_only = self.is_image_only_body(body)
+
+            if image_only:
+                self.convert_to_fit_image_page(book_part)
+            else:
+                self.ensure_main_wrapper(body)
+                if not body.get("class"):
+                    body.set("class", "p-text")
+                wm = book_part.writing_mode_value or self.writing_mode
+                if wm == "vertical-rl":
+                    existing.insert(0, "vrtl")
+
+        if existing:
+            book_part.html.set("class", " ".join(existing))
+        else:
+            book_part.html.attrib.pop("class", None)
+
     def save_book_parts(self):
         for book_part in self.book_parts:
             if self.DEBUG:
@@ -1066,7 +1198,9 @@ class EPUB_Output(object):
 
             if head.find("title") is None:
                 title = etree.SubElement(head, "title")
-                title.text = book_part.filename.replace("/", "").replace(".xhtml", "")
+                title.text = self.title
+
+            self.finalize_xhtml_structure(book_part, head, body)
 
             if CONSOLIDATE_HTML:
                 self.consolidate_html(body)
@@ -1099,7 +1233,7 @@ class EPUB_Output(object):
                         "amzn: https://kindlegen.s3.amazonaws.com/AmazonKindlePublishingGuidelines.pdf")
                     break
 
-            etree.cleanup_namespaces(book_part.html)
+            etree.cleanup_namespaces(book_part.html, keep_ns_prefixes=["epub"])
 
             if self.DEBUG:
                 log.debug("%s: %s" % (book_part.filename, etree.tostring(book_part.html)))
@@ -1116,6 +1250,9 @@ class EPUB_Output(object):
                 self.manifest_resource(
                     book_part.filename, book_part.opf_properties, book_part.linear, idref=book_part.idref,
                     data=html_str, mimetype="application/xhtml+xml")
+
+        if hasattr(self, "refresh_book_style_css"):
+            self.refresh_book_style_css()
 
     def consolidate_html(self, body):
 
