@@ -29,6 +29,7 @@ GENERATE_EPUB2_NCX_DOCTYPE = False
 CONSOLIDATE_HTML = True
 BEAUTIFY_HTML = True
 USE_HIDDEN_ATTRIBUTE = True
+KEEP_PAGE_NUMBERS = False
 
 
 STANDARD_GUIDE_TYPE = {
@@ -489,6 +490,9 @@ class EPUB_Output(object):
             else:
                 self.ncx_toc.append(TocEntry("Content", target=self.book_parts[0].filename))
 
+        if not KEEP_PAGE_NUMBERS:
+            self.remove_page_markers()
+
         if not self.generate_epub2:
             for book_part in self.book_parts:
                 if book_part.is_nav:
@@ -515,6 +519,29 @@ class EPUB_Output(object):
                 "2" if self.generate_epub2 else "3", "2" if self.epub2_desired else "3"))
 
         return self.zip_epub()
+
+    def remove_page_markers(self):
+        self.pagemap = []
+
+        for book_part in self.book_parts:
+            for elem in list(book_part.html.iter("*")):
+                if re.match(r"^page_[0-9]+$", elem.get("id", "")) is None:
+                    continue
+
+                elem.attrib.pop("id", None)
+
+                if elem.tag == "span" and len(elem.attrib) == 0 and len(elem) == 0 and not (elem.text or ""):
+                    parent = elem.getparent()
+                    if parent is not None:
+                        index = parent.index(elem)
+                        tail = elem.tail
+                        parent.remove(elem)
+                        if tail:
+                            if index > 0:
+                                prev = parent[index - 1]
+                                prev.tail = (prev.tail or "") + tail
+                            else:
+                                parent.text = (parent.text or "") + tail
 
     def fix_html_id(self, id):
         if self.illustrated_layout:
@@ -1347,6 +1374,14 @@ class EPUB_Output(object):
                     if ee.tag in {"aside", "div", "figure", "h1", "h2", "h3", "h4", "h5", "h6",
                                   "hr", "p", "table", "ul", "ol", IDX_ENTRY} and not ee.tail:
                         ee.tail = "\n"
+
+        for nav in body.iterfind(".//nav"):
+            nav.text = (nav.text or "") + "\n"
+            for e in nav.iterdescendants():
+                if e.tag == "ol" and not e.text:
+                    e.text = "\n"
+                if e.tag in {"h1", "h2", "h3", "h4", "h5", "h6", "li", "ol"} and not e.tail:
+                    e.tail = "\n"
 
     def create_opf(self):
 
