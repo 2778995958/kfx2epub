@@ -3,7 +3,9 @@ import decimal
 import functools
 from lxml import etree
 import os
+import pkgutil
 import re
+import zipfile
 
 from .epub_output import (EPUB_NS_URI, EPUB_TYPE, IDX_ENTRY, MATH, qname, split_value, SVG, XML_LANG, XML_NS_URI, value_str)
 from .ion import (ion_type, IonBool, IonDecimal, IonFloat, IonInt, IonList, IonString, IonStruct, IonSymbol, isstring)
@@ -1052,9 +1054,24 @@ _bundled_style_cache = {}
 
 def read_bundled_style(filename):
     if filename not in _bundled_style_cache:
-        path = os.path.join(BUNDLED_STYLES_DIR, filename)
-        with open(path, "rb") as f:
-            _bundled_style_cache[filename] = f.read()
+        resource_name = "styles/%s" % filename
+        data = pkgutil.get_data(__package__, resource_name) if __package__ else None
+
+        if data is None:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            zip_pos = base_path.lower().find(".zip")
+            if zip_pos >= 0:
+                zip_filename = base_path[:zip_pos + 4]
+                resource_path = os.path.join(base_path[zip_pos + 5:], "styles", filename).replace(os.sep, "/")
+                with zipfile.ZipFile(zip_filename, "r") as zf:
+                    data = zf.read(resource_path)
+
+        if data is None:
+            path = os.path.join(BUNDLED_STYLES_DIR, filename)
+            with open(path, "rb") as f:
+                data = f.read()
+
+        _bundled_style_cache[filename] = data
 
     return _bundled_style_cache[filename]
 
