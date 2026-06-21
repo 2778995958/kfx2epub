@@ -1,8 +1,8 @@
 # kfx2epub
 
-將 Kindle 的 `KFX` / `KFX-ZIP` 轉換為 `EPUB` 的工具。
+將 `KFX` / `KFX-ZIP` 轉換為 `EPUB` 的工具。
 
-本工具目前只針對日本 Kindle 書籍使用與測試，其他地區或語系的 KFX 書籍不保證能正常轉換或取得理想排版結果。
+本工具只以日本書籍為對象。
 
 ## 語言版本
 
@@ -24,7 +24,7 @@
 - 拖曳檔案或資料夾時，輸出仍固定寫入 `convert_kfx2epub.py` 同目錄下的 `archived_epub`
 - 自動以 `[作者] 書名.epub` 格式命名輸出
 - 自動將檔名中的非法字元轉為全型安全字元
-- EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名改用規律命名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-001.ext`、`image/p-001.ext`
+- 針對日本書籍整理 EPUB 內部目錄、XHTML、OPF、CSS 與圖片檔名，例如 `item/standard.opf`、`navigation-documents.xhtml`、`p-cover.xhtml`、`p-toc.xhtml`、`p-fmatter-001.xhtml`、`p-001.xhtml`、`p-colophon.xhtml`、`book-style.css`、`style-reset.css`、`image/cover.ext`、`image/i-001.ext`、`image/p-001.ext`
 
 ## 功能
 
@@ -107,7 +107,7 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 
 ## EPUB 內部檔名規則
 
-轉換後的 EPUB 會盡量使用規律、易讀的內部檔名，避免沿用 KFX 原始 section/resource 名稱造成看似亂碼的檔名。
+轉換後的 EPUB 會依目前針對日本書籍整理出的規則，盡量使用規律、易讀的內部檔名，避免使用難以辨識的原始內部名稱。這些規則不代表保證適用於其他地區或語系的書籍。
 
 ### 主要目錄與檔案
 

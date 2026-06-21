@@ -1,8 +1,8 @@
 # kfx2epub
 
-A tool for converting Kindle `KFX` / `KFX-ZIP` files to `EPUB`.
+A tool for converting `KFX` / `KFX-ZIP` files to `EPUB`.
 
-This tool is currently intended and tested only for Japanese Kindle books. KFX books from other regions or languages are not guaranteed to convert correctly or preserve ideal layout results.
+This tool is intended only for Japanese books.
 
 ## Languages
 
@@ -24,7 +24,7 @@ This tool is currently intended and tested only for Japanese Kindle books. KFX b
 - When using drag-and-drop, output is still written to the `archived_epub` folder next to `convert_kfx2epub.py`.
 - Automatically names output files in the `[Author] Book Title.epub` format.
 - Automatically converts illegal filename characters into full-width safe characters.
-- Uses regular internal EPUB names for folders, XHTML, OPF, CSS, and images, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-001.ext`, and `image/p-001.ext`.
+- Organizes EPUB internal folders, XHTML, OPF, CSS, and image filenames for Japanese books, such as `item/standard.opf`, `navigation-documents.xhtml`, `p-cover.xhtml`, `p-toc.xhtml`, `p-fmatter-001.xhtml`, `p-001.xhtml`, `p-colophon.xhtml`, `book-style.css`, `style-reset.css`, `image/cover.ext`, `image/i-001.ext`, and `image/p-001.ext`.
 
 ## Features
 
@@ -107,7 +107,7 @@ Example:
 
 ## EPUB Internal Filename Rules
 
-The converted EPUB tries to use regular, readable internal filenames instead of the original KFX section/resource names, which can look like garbled text.
+The converted EPUB tries to use regular, readable internal filenames based on rules currently organized for Japanese books, avoiding hard-to-identify original internal names. These rules are not a guarantee that books from other regions or languages will be handled correctly.
 
 ### Main Folders and Files
 
