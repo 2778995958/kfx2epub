@@ -1055,16 +1055,25 @@ _bundled_style_cache = {}
 def read_bundled_style(filename):
     if filename not in _bundled_style_cache:
         resource_name = "styles/%s" % filename
-        data = pkgutil.get_data(__package__, resource_name) if __package__ else None
+        data = None
+
+        if __package__:
+            try:
+                data = pkgutil.get_data(__package__, resource_name)
+            except (IOError, OSError):
+                pass
 
         if data is None:
             base_path = os.path.dirname(os.path.abspath(__file__))
-            zip_pos = base_path.lower().find(".zip")
+            zip_pos = base_path.lower().rfind(".zip")
             if zip_pos >= 0:
                 zip_filename = base_path[:zip_pos + 4]
                 resource_path = os.path.join(base_path[zip_pos + 5:], "styles", filename).replace(os.sep, "/")
-                with zipfile.ZipFile(zip_filename, "r") as zf:
-                    data = zf.read(resource_path)
+                try:
+                    with zipfile.ZipFile(zip_filename, "r") as zf:
+                        data = zf.read(resource_path)
+                except (IOError, OSError, KeyError, zipfile.BadZipFile):
+                    pass
 
         if data is None:
             path = os.path.join(BUNDLED_STYLES_DIR, filename)
@@ -2319,30 +2328,36 @@ class KFX_EPUB_Properties(object):
 
     def ancestor_overrides_text_align(self, elem):
         parent = elem.getparent()
-        while parent is not None and parent.tag != "body":
+        while parent is not None:
             ta = self.Style(parent.get("style", "")).get("text-align")
             if ta is not None:
                 return ta != "justify"
+            if parent.tag == "body":
+                break
             parent = parent.getparent()
 
         return False
 
     def ancestor_overrides_property(self, elem, property_name, reset_value):
         parent = elem.getparent()
-        while parent is not None and parent.tag != "body":
+        while parent is not None:
             value = self.Style(parent.get("style", "")).get(property_name)
             if value is not None:
                 return value != reset_value
+            if parent.tag == "body":
+                break
             parent = parent.getparent()
 
         return False
 
     def ancestor_overrides_font_family(self, elem):
         parent = elem.getparent()
-        while parent is not None and parent.tag != "body":
+        while parent is not None:
             font_family = self.Style(parent.get("style", "")).get("font-family")
             if font_family is not None:
                 return font_family not in RESET_DEFAULT_FONT_FAMILIES
+            if parent.tag == "body":
+                break
             parent = parent.getparent()
 
         return False

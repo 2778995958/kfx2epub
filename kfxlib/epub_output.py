@@ -1324,11 +1324,17 @@ class EPUB_Output(object):
             head.remove(title)
             head.insert(1, title)
 
+        if not book_part.html.get(XML_LANG):
+            book_part.html.set(XML_LANG, self.language if self.language else "ja")
+
         # Direction class on <html>. Fixed-layout pages follow the ebpaj FXL template (no class, viewport governs).
         existing = book_part.html.get("class", "").split()
         existing = [c for c in existing if c not in ("vrtl", "hltr", "vltr", "hrtl")]
 
-        if book_part.is_fxl:
+        if book_part.is_nav:
+            body.attrib.pop("class", None)
+            body.attrib.pop("style", None)
+        elif book_part.is_fxl:
             self.convert_to_fixed_layout_svg_page(book_part, head, body)
         else:
             image_only = self.is_image_only_body(body)
@@ -1337,7 +1343,11 @@ class EPUB_Output(object):
                 self.convert_to_fit_image_page(book_part)
             else:
                 self.ensure_main_wrapper(body)
-                if not body.get("class"):
+                if book_part.filename == self.TOC_FILEPATH and not body.get("class"):
+                    body.set("class", "p-toc")
+                elif book_part.filename == self.COLOPHON_FILEPATH and not body.get("class"):
+                    body.set("class", "p-colophon")
+                elif not body.get("class"):
                     body.set("class", "p-text")
                 if book_part.has_vertical_rl_class:
                     existing.insert(0, "vrtl")
@@ -1975,14 +1985,19 @@ class EPUB_Output(object):
         self.add_oebps_file(self.OPF_FILEPATH, data, "application/oebps-package+xml")
 
     def container_xml(self):
-        NS_URI = "urn:oasis:names:tc:opendocument:xmlns:container"
-        container = etree.Element(qname(NS_URI, "container"), nsmap={None: NS_URI}, attrib={"version": "1.0"})
-        rootfiles = etree.SubElement(container, "rootfiles")
-        etree.SubElement(rootfiles, "rootfile", attrib={
-            "full-path": (self.OEBPS_DIR + self.OPF_FILEPATH),
-            "media-type": "application/oebps-package+xml"})
-
-        return etree.tostring(container, encoding="utf-8", pretty_print=True, xml_declaration=True)
+        return ("""<?xml version="1.0"?>
+<container
+ version="1.0"
+ xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+>
+<rootfiles>
+<rootfile
+ full-path="%s"
+ media-type="application/oebps-package+xml"
+/>
+</rootfiles>
+</container>
+""" % (self.OEBPS_DIR + self.OPF_FILEPATH)).encode("utf-8")
 
     def create_ncx(self):
         doctype = (
@@ -2103,11 +2118,15 @@ class EPUB_Output(object):
 
         book_part = self.new_book_part(filename=filename, linear=None)
         book_part.is_nav = True
+        book_part.html.set(XML_LANG, self.language if self.language else "ja")
 
         body = etree.SubElement(book_part.html, "body")
+        body.text = "\n"
 
         nav = etree.SubElement(body, "nav")
         nav.set(EPUB_TYPE, "toc")
+        nav.set("id", "toc")
+        nav.tail = "\n"
 
         if not self.is_magazine:
             self.hide_element(nav)
@@ -2120,6 +2139,7 @@ class EPUB_Output(object):
         if self.guide:
             nav = etree.SubElement(body, "nav")
             nav.set(EPUB_TYPE, "landmarks")
+            nav.tail = "\n"
 
             if not self.is_magazine:
                 self.hide_element(nav)
@@ -2142,6 +2162,7 @@ class EPUB_Output(object):
         if len(self.pagemap) > 0:
             nav = etree.SubElement(body, "nav")
             nav.set(EPUB_TYPE, "page-list")
+            nav.tail = "\n"
 
             if not self.is_magazine:
                 self.hide_element(nav)
