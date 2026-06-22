@@ -7,6 +7,7 @@ from PIL import (Image, ImageDraw, ImageFont)
 import posixpath
 import re
 import uuid
+import xml.sax.saxutils
 import zipfile
 
 try:
@@ -29,6 +30,7 @@ GENERATE_EPUB2_NCX_DOCTYPE = False
 CONSOLIDATE_HTML = True
 BEAUTIFY_HTML = True
 USE_HIDDEN_ATTRIBUTE = True
+KEEP_PAGE_NUMBERS = False
 
 
 STANDARD_GUIDE_TYPE = {
@@ -168,6 +170,8 @@ class BookPart(OPFProperties):
 
         self.is_cover_page = False
         self.nmdl_template_id = None
+        self.writing_mode_value = None
+        self.has_vertical_rl_class = False
 
     def head(self):
         head = self.html.find("head")
@@ -252,7 +256,11 @@ class EPUB_Output(object):
     IMAGE_FILEPATH = "/%s"
     PDF_FILEPATH = "/%s"
     STYLES_CSS_FILEPATH = "/book-style.css"
+    KFX_CSS_FILEPATH = "/style-kfx.css"
     RESET_CSS_FILEPATH = "/style-reset.css"
+    STANDARD_CSS_FILEPATH = "/style-standard.css"
+    ADVANCE_CSS_FILEPATH = "/style-advance.css"
+    CHECK_CSS_FILEPATH = "/style-check.css"
     FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout-jp.css"
     LAYOUT_CSS_FILEPATH = "/layout%04d.css"
 
@@ -268,7 +276,11 @@ class EPUB_Output(object):
         IMAGE_FILEPATH = "/image" + IMAGE_FILEPATH
         PDF_FILEPATH = "/misc" + PDF_FILEPATH
         STYLES_CSS_FILEPATH = "/style" + STYLES_CSS_FILEPATH
+        KFX_CSS_FILEPATH = "/style" + KFX_CSS_FILEPATH
         RESET_CSS_FILEPATH = "/style" + RESET_CSS_FILEPATH
+        STANDARD_CSS_FILEPATH = "/style" + STANDARD_CSS_FILEPATH
+        ADVANCE_CSS_FILEPATH = "/style" + ADVANCE_CSS_FILEPATH
+        CHECK_CSS_FILEPATH = "/style" + CHECK_CSS_FILEPATH
         FIXED_LAYOUT_CSS_FILEPATH = "/style" + FIXED_LAYOUT_CSS_FILEPATH
         LAYOUT_CSS_FILEPATH = "/style" + LAYOUT_CSS_FILEPATH
 
@@ -288,6 +300,7 @@ class EPUB_Output(object):
         self.css_files = set()
         self.pagemap = []
         self.dom_image_filenames = set()
+        self.original_dom_image_roles = {}
 
         self.asin = ""
         self.book_id = ""
@@ -479,6 +492,9 @@ class EPUB_Output(object):
             else:
                 self.ncx_toc.append(TocEntry("Content", target=self.book_parts[0].filename))
 
+        if not KEEP_PAGE_NUMBERS:
+            self.remove_page_markers()
+
         if not self.generate_epub2:
             for book_part in self.book_parts:
                 if book_part.is_nav:
@@ -505,6 +521,29 @@ class EPUB_Output(object):
                 "2" if self.generate_epub2 else "3", "2" if self.epub2_desired else "3"))
 
         return self.zip_epub()
+
+    def remove_page_markers(self):
+        self.pagemap = []
+
+        for book_part in self.book_parts:
+            for elem in list(book_part.html.iter("*")):
+                if re.match(r"^page_[0-9]+$", elem.get("id", "")) is None:
+                    continue
+
+                elem.attrib.pop("id", None)
+
+                if elem.tag == "span" and len(elem.attrib) == 0 and len(elem) == 0 and not (elem.text or ""):
+                    parent = elem.getparent()
+                    if parent is not None:
+                        index = parent.index(elem)
+                        tail = elem.tail
+                        parent.remove(elem)
+                        if tail:
+                            if index > 0:
+                                prev = parent[index - 1]
+                                prev.tail = (prev.tail or "") + tail
+                            else:
+                                parent.text = (parent.text or "") + tail
 
     def fix_html_id(self, id):
         if self.illustrated_layout:
@@ -772,7 +811,8 @@ class EPUB_Output(object):
                     continue
 
                 seen_filenames.add(filename)
-                role_counts["illustration" if self.is_illustration_image(elem) else "page"] += 1
+                role = self.dom_image_role(elem, filename)
+                role_counts[role] += 1
 
         self.illustration_image_sequence_width = max(3, len(str(role_counts["illustration"] or 0)))
         self.page_image_sequence_width = max(3, len(str(role_counts["page"] or 0)))
@@ -790,7 +830,7 @@ class EPUB_Output(object):
 
             new_filename = self.rename_image_file(
                 filename,
-                "illustration" if self.is_illustration_image(elem) else "page")
+                self.dom_image_role(elem, filename))
             if new_filename:
                 self.dom_image_filenames.add(filename)
                 self.dom_image_filenames.add(new_filename)
@@ -804,6 +844,21 @@ class EPUB_Output(object):
 
         return None
 
+    def original_image_role(self, elem):
+        parent = elem.getparent()
+        while parent is not None and parent.tag != "body":
+            if parent.tag == "div" and "main" not in parent.get("class", "").split():
+                return "illustration"
+            parent = parent.getparent()
+
+        return "page"
+
+    def dom_image_role(self, elem, filename):
+        if elem.tag == "img" and "fit" in elem.get("class", "").split():
+            return "illustration"
+
+        return self.original_dom_image_roles.get(filename) or self.original_image_role(elem)
+
     def is_cover_image_filename(self, filename):
         manifest_entry = self.manifest_files.get(remove_url_fragment(filename))
         return manifest_entry is not None and manifest_entry.is_cover_image
@@ -811,7 +866,7 @@ class EPUB_Output(object):
     def is_illustration_image(self, elem):
         parent = elem.getparent()
         while parent is not None and parent.tag != "body":
-            if parent.tag == "div":
+            if parent.tag == "div" and "main" not in parent.get("class", "").split():
                 return True
             parent = parent.getparent()
 
@@ -1054,6 +1109,272 @@ class EPUB_Output(object):
                         self.generate_epub2 = False
                         return
 
+    TEXT_BLOCK_TAGS = {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "td", "th", "dt", "dd", "blockquote", "nav"}
+
+    def is_image_only_body(self, body):
+        has_text_block = any(body.find(".//%s" % tag) is not None for tag in self.TEXT_BLOCK_TAGS)
+        if has_text_block:
+            return False
+
+        has_image = body.find(".//img") is not None or body.find(".//%s" % SVG) is not None
+        return has_image
+
+    def fixed_layout_viewport_size(self, head):
+        for meta in head.findall("meta"):
+            if meta.get("name") != "viewport":
+                continue
+
+            content = meta.get("content", "")
+            mw = re.search("width=([0-9]+)", content)
+            mh = re.search("height=([0-9]+)", content)
+            if mw and mh:
+                return int(mw.group(1)), int(mh.group(1))
+
+        return None, None
+
+    def fixed_layout_image_file_size(self, src, ref_from):
+        filename = get_url_filename(urlabspath(src, ref_from=ref_from))
+        filename = remove_url_fragment(filename or "")
+        image_file = self.oebps_files.get(filename)
+        if image_file is not None and image_file.width and image_file.height:
+            return image_file.width, image_file.height
+
+        return None, None
+
+    def fixed_layout_length(self, value):
+        if value is None:
+            return None
+
+        match = re.match(r"^([0-9]+)(?:px)?$", str(value).strip())
+        if match:
+            return int(match.group(1))
+
+        return None
+
+    def fixed_layout_svg_viewbox_size(self, svg):
+        match = re.match(r"^\s*0\s+0\s+([0-9]+)\s+([0-9]+)\s*$", svg.get("viewBox", ""))
+        if match:
+            return int(match.group(1)), int(match.group(2))
+
+        return None, None
+
+    def extract_single_fixed_layout_image(self, book_part, body):
+        image_sources = []
+
+        for img in body.findall(".//img"):
+            src = img.get("src")
+            if not src:
+                continue
+
+            width = self.fixed_layout_length(img.get("width"))
+            height = self.fixed_layout_length(img.get("height"))
+            if width is None or height is None:
+                width, height = self.fixed_layout_image_file_size(src, book_part.filename)
+            image_sources.append((src, width, height))
+
+        for svg in body.findall(".//%s" % SVG):
+            viewbox_width, viewbox_height = self.fixed_layout_svg_viewbox_size(svg)
+            for image in svg.findall(".//%s" % qname(SVG_NS_URI, "image")):
+                src = image.get(XLINK_HREF) or image.get("href")
+                if not src:
+                    continue
+
+                width = self.fixed_layout_length(image.get("width")) or viewbox_width
+                height = self.fixed_layout_length(image.get("height")) or viewbox_height
+                if width is None or height is None:
+                    width, height = self.fixed_layout_image_file_size(src, book_part.filename)
+                image_sources.append((src, width, height))
+
+        if len(image_sources) != 1:
+            log.warning("Fixed-layout page %s has %d image sources; keeping original XHTML" % (book_part.filename, len(image_sources)))
+            return None, None, None
+
+        return image_sources[0]
+
+    def order_fixed_layout_head(self, book_part, head):
+        self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
+        fixed_layout_href = urlrelpath(self.FIXED_LAYOUT_CSS_FILEPATH, ref_from=book_part.filename)
+
+        charset_meta = next((meta for meta in head.findall("meta") if meta.get("charset") is not None), None)
+        title = head.find("title")
+        fixed_layout_link = next((link for link in head.findall("link") if link.get("rel") == "stylesheet" and link.get("href") == fixed_layout_href), None)
+        viewport_meta = next((meta for meta in head.findall("meta") if meta.get("name") == "viewport"), None)
+
+        ordered = [e for e in [charset_meta, title, fixed_layout_link, viewport_meta] if e is not None]
+        for elem in ordered:
+            head.remove(elem)
+
+        for index, elem in enumerate(ordered):
+            head.insert(index, elem)
+
+    def convert_to_fixed_layout_svg_page(self, book_part, head, body):
+        src, image_width, image_height = self.extract_single_fixed_layout_image(book_part, body)
+        if not src:
+            return
+
+        viewport_width, viewport_height = self.fixed_layout_viewport_size(head)
+        width = viewport_width or image_width or self.original_width
+        height = viewport_height or image_height or self.original_height
+        if not width or not height:
+            log.warning("Fixed-layout page %s has no usable viewport or image size; keeping original XHTML" % book_part.filename)
+            return
+
+        self.order_fixed_layout_head(book_part, head)
+
+        body.clear()
+        if book_part.is_cover_page:
+            body.set(EPUB_TYPE, "cover")
+        body.text = "\n"
+
+        main = etree.SubElement(body, "div")
+        main.set("class", "main")
+        main.text = "\n\n"
+        main.tail = "\n"
+
+        svg = etree.SubElement(main, SVG, nsmap=SVG_NAMESPACES)
+        svg.set("version", "1.1")
+        svg.set("width", "100%")
+        svg.set("height", "100%")
+        svg.set("viewBox", "0 0 %d %d" % (width, height))
+        svg.text = "\n"
+        svg.tail = "\n\n"
+
+        image = etree.SubElement(svg, qname(SVG_NS_URI, "image"))
+        image.set("width", "%d" % width)
+        image.set("height", "%d" % height)
+        image.set(XLINK_HREF, src)
+        image.tail = "\n"
+
+    def ensure_main_wrapper(self, body):
+        # ebpaj reflowable pages use a single body > div.main container.
+        if len(body) == 1 and body[0].tag == "div" and "main" in body[0].get("class", "").split():
+            return
+
+        main = etree.Element("div")
+        main.set("class", "main")
+        main.text = (body.text or "") + "\n"
+        body.text = None
+
+        for child in list(body):
+            body.remove(child)
+            main.append(child)
+            if not child.tail:
+                child.tail = "\n"
+
+        main.tail = "\n"
+        body.append(main)
+
+    def convert_to_fit_image_page(self, book_part):
+        # ebpaj single-image page: <body class="p-image"><div class="main"><p><img class="fit"/></p>
+        # Cover pages use <body epub:type="cover" class="p-cover">.
+        body = book_part.body()
+        image_sources = []
+
+        for img in body.findall(".//img"):
+            src = img.get("src")
+            if src:
+                filename = get_url_filename(urlabspath(src, ref_from=book_part.filename))
+                filename = remove_url_fragment(filename or "")
+                if filename:
+                    self.original_dom_image_roles.setdefault(filename, self.original_image_role(img))
+                image_sources.append((src, img.get("alt", "")))
+
+        for svg in body.findall(".//%s" % SVG):
+            for image in svg.findall(".//%s" % qname(SVG_NS_URI, "image")):
+                src = image.get(XLINK_HREF) or image.get("href")
+                if src:
+                    filename = get_url_filename(urlabspath(src, ref_from=book_part.filename))
+                    filename = remove_url_fragment(filename or "")
+                    if filename:
+                        self.original_dom_image_roles.setdefault(filename, self.original_image_role(svg))
+                    image_sources.append((src, ""))
+
+        if not image_sources:
+            return
+
+        body.clear()
+        if book_part.is_cover_page:
+            body.set(EPUB_TYPE, "cover")
+            body.set("class", "p-cover")
+        else:
+            body.set("class", "p-image")
+        body.text = "\n"
+        main = etree.SubElement(body, "div")
+        main.set("class", "main")
+        main.text = "\n"
+        main.tail = "\n"
+
+        for src, alt in image_sources:
+            p = etree.SubElement(main, "p")
+            p.tail = "\n"
+            img = etree.SubElement(p, "img", attrib={"class": "fit", "src": src, "alt": alt})
+
+    def finalize_xhtml_structure(self, book_part, head, body):
+        # B2: prepend <meta charset="UTF-8"/> and order head as meta -> title -> link
+        for meta in head.findall("meta"):
+            if meta.get("charset") is not None:
+                head.remove(meta)
+
+        charset_meta = etree.Element("meta")
+        charset_meta.set("charset", "UTF-8")
+        head.insert(0, charset_meta)
+
+        title = head.find("title")
+        if title is not None:
+            head.remove(title)
+            head.insert(1, title)
+
+        if not book_part.html.get(XML_LANG):
+            book_part.html.set(XML_LANG, self.language if self.language else "ja")
+
+        # Direction class on <html>. Fixed-layout pages follow the ebpaj FXL template (no class, viewport governs).
+        existing = book_part.html.get("class", "").split()
+        existing = [c for c in existing if c not in ("vrtl", "hltr", "vltr", "hrtl")]
+
+        if book_part.is_nav:
+            body.attrib.pop("class", None)
+            body.attrib.pop("style", None)
+        elif book_part.is_fxl:
+            self.convert_to_fixed_layout_svg_page(book_part, head, body)
+        else:
+            image_only = self.is_image_only_body(body)
+
+            if image_only:
+                self.convert_to_fit_image_page(book_part)
+            else:
+                self.ensure_main_wrapper(body)
+                if book_part.filename == self.TOC_FILEPATH and not body.get("class"):
+                    body.set("class", "p-toc")
+                elif book_part.filename == self.COLOPHON_FILEPATH and not body.get("class"):
+                    body.set("class", "p-colophon")
+                elif not body.get("class"):
+                    body.set("class", "p-text")
+                if book_part.has_vertical_rl_class:
+                    existing.insert(0, "vrtl")
+
+        if existing:
+            book_part.html.set("class", " ".join(existing))
+        else:
+            book_part.html.attrib.pop("class", None)
+
+    def format_xhtml_document_header(self, html_str):
+        declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
+        html_str = declaration + html_str
+        html_str = html_str.replace(b"\n class=", b" class=")
+        html_str = html_str.replace(b"<html ", b"<html\n ", 1)
+        html_str = html_str.replace(b'" xmlns:epub=', b'"\n xmlns:epub=', 1)
+        html_str = html_str.replace(b'" xml:lang=', b'"\n xml:lang=', 1)
+
+        html_tag_end = html_str.find(b">\n<head>")
+        if html_tag_end >= 0:
+            html_tag = html_str[:html_tag_end]
+            html_tag = html_tag.replace(b'" class=', b'"\n class=', 1)
+            html_str = html_tag + html_str[html_tag_end:]
+
+        html_str = html_str.replace(b'">\n<head>', b'"\n>\n<head>', 1)
+        html_str = html_str.replace(b"</head>\n<body", b"</head>\n\n<body", 1)
+        return html_str
+
     def save_book_parts(self):
         for book_part in self.book_parts:
             if self.DEBUG:
@@ -1066,7 +1387,9 @@ class EPUB_Output(object):
 
             if head.find("title") is None:
                 title = etree.SubElement(head, "title")
-                title.text = book_part.filename.replace("/", "").replace(".xhtml", "")
+                title.text = self.title
+
+            self.finalize_xhtml_structure(book_part, head, body)
 
             if CONSOLIDATE_HTML:
                 self.consolidate_html(body)
@@ -1099,7 +1422,7 @@ class EPUB_Output(object):
                         "amzn: https://kindlegen.s3.amazonaws.com/AmazonKindlePublishingGuidelines.pdf")
                     break
 
-            etree.cleanup_namespaces(book_part.html)
+            etree.cleanup_namespaces(book_part.html, keep_ns_prefixes=["epub"])
 
             if self.DEBUG:
                 log.debug("%s: %s" % (book_part.filename, etree.tostring(book_part.html)))
@@ -1108,14 +1431,19 @@ class EPUB_Output(object):
                 document = etree.ElementTree(book_part.html)
                 doctype = b"<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.1//EN' 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd'>"
 
-                html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=True)
+                html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=False)
 
                 if not self.generate_epub2:
                     html_str = html_str.replace(doctype + b"\n", b"<!DOCTYPE html>\n")
 
+                html_str = self.format_xhtml_document_header(html_str)
+
                 self.manifest_resource(
                     book_part.filename, book_part.opf_properties, book_part.linear, idref=book_part.idref,
                     data=html_str, mimetype="application/xhtml+xml")
+
+        if hasattr(self, "refresh_book_style_css"):
+            self.refresh_book_style_css()
 
     def consolidate_html(self, body):
 
@@ -1211,6 +1539,186 @@ class EPUB_Output(object):
                                   "hr", "p", "table", "ul", "ol", IDX_ENTRY} and not ee.tail:
                         ee.tail = "\n"
 
+        for nav in body.iterfind(".//nav"):
+            nav.text = (nav.text or "") + "\n"
+            for e in nav.iterdescendants():
+                if e.tag == "ol" and not e.text:
+                    e.text = "\n"
+                if e.tag in {"h1", "h2", "h3", "h4", "h5", "h6", "li", "ol"} and not e.tail:
+                    e.tail = "\n"
+
+    def opf_tag_name(self, elem):
+        ns = namespace(elem.tag)
+        name = localname(elem.tag)
+        if ns == DC_NS_URI:
+            return "dc:" + name
+        return name
+
+    def opf_attr_name(self, attr):
+        ns = namespace(attr)
+        name = localname(attr)
+        if ns == XML_NS_URI:
+            return "xml:" + name
+        return name
+
+    def opf_attrs(self, elem, order=()):
+        items = dict((self.opf_attr_name(k), v) for k, v in elem.attrib.items())
+        names = [n for n in order if n in items] + sorted(n for n in items if n not in order)
+        return "".join(' %s="%s"' % (n, xml.sax.saxutils.escape(str(items[n]), {'"': '&quot;'})) for n in names)
+
+    def opf_element_line(self, elem, order=()):
+        tag = self.opf_tag_name(elem)
+        attrs = self.opf_attrs(elem, order)
+        text = elem.text or ""
+        if len(elem) == 0 and text == "":
+            return "<%s%s/>" % (tag, attrs)
+        if len(elem) == 0:
+            return "<%s%s>%s</%s>" % (tag, attrs, xml.sax.saxutils.escape(str(text)), tag)
+        return etree.tostring(elem, encoding="unicode", pretty_print=True).strip()
+
+    def serialize_opf_metadata(self, metadata):
+        children = list(metadata)
+        consumed = set()
+
+        def take(pred):
+            result = []
+            for i, child in enumerate(children):
+                if i not in consumed and pred(child):
+                    consumed.add(i)
+                    result.append((i, child))
+            return result
+
+        title_items = take(lambda e: e.tag == qname(DC_NS_URI, "title"))
+        title_refines = take(lambda e: e.tag == "meta" and e.get("refines") == "#title")
+        creator_items = []
+        for i, child in enumerate(children):
+            if i in consumed or child.tag != qname(DC_NS_URI, "creator"):
+                continue
+            consumed.add(i)
+            block = [child]
+            creator_id = child.get("id")
+            if creator_id:
+                for j, meta in enumerate(children):
+                    if j not in consumed and meta.tag == "meta" and meta.get("refines") == "#" + creator_id:
+                        consumed.add(j)
+                        block.append(meta)
+            creator_items.append(block)
+
+        publisher_items = take(lambda e: e.tag == qname(DC_NS_URI, "publisher"))
+        language_items = take(lambda e: e.tag == qname(DC_NS_URI, "language"))
+        identifier_items = take(lambda e: e.tag == qname(DC_NS_URI, "identifier"))
+        modified_items = take(lambda e: e.tag == "meta" and e.get("property") == "dcterms:modified")
+        etc_items = [(i, e) for i, e in enumerate(children) if i not in consumed]
+
+        lines = ['<metadata xmlns:dc="%s">' % DC_NS_URI, ""]
+
+        if title_items:
+            lines.extend(["<!-- 作品名 -->"])
+            lines.extend(self.opf_element_line(e, ("id",)) for i, e in title_items)
+            lines.extend(self.opf_element_line(e, ("refines", "property", "scheme")) for i, e in title_refines)
+            lines.append("")
+
+        if creator_items:
+            lines.extend(["<!-- 著者名 -->"])
+            for block_index, block in enumerate(creator_items):
+                if block_index:
+                    lines.append("")
+                for elem in block:
+                    lines.append(self.opf_element_line(elem, ("id", "refines", "property", "scheme")))
+            lines.append("")
+
+        if publisher_items:
+            lines.extend(["<!-- 出版社名 -->"])
+            lines.extend(self.opf_element_line(e, ("id",)) for i, e in publisher_items)
+            lines.append("")
+
+        if language_items:
+            lines.extend(["<!-- 言語 -->"])
+            lines.extend(self.opf_element_line(e) for i, e in language_items)
+            lines.append("")
+
+        if identifier_items:
+            lines.extend(["<!-- ファイルid -->"])
+            lines.extend(self.opf_element_line(e, ("id", "opf:scheme")) for i, e in identifier_items)
+            lines.append("")
+
+        if modified_items:
+            lines.extend(["<!-- 更新日 -->"])
+            lines.extend(self.opf_element_line(e, ("property",)) for i, e in modified_items)
+            lines.append("")
+
+        if etc_items:
+            lines.extend(["<!-- etc. -->"])
+            lines.extend(self.opf_element_line(e, ("name", "content", "property", "refines", "scheme")) for i, e in etc_items)
+            lines.append("")
+
+        lines.append("</metadata>")
+        return "\n".join(lines)
+
+    def opf_manifest_category(self, item):
+        href = item.get("href", "")
+        if item.get("properties") == "nav" or href.startswith("navigation-documents"):
+            return "navigation"
+        if href.startswith("style/"):
+            return "style"
+        if href.startswith("image/"):
+            return "image"
+        if href.startswith("xhtml/"):
+            return "xhtml"
+        if href.startswith("fonts/"):
+            return "font"
+        return "misc"
+
+    def serialize_opf_manifest(self, manifest):
+        groups = collections.OrderedDict((name, []) for name in ["navigation", "style", "image", "xhtml", "font", "misc"])
+        for item in manifest:
+            groups[self.opf_manifest_category(item)].append(item)
+
+        lines = ["<manifest>", ""]
+        for category, items in groups.items():
+            if not items:
+                continue
+            lines.append("<!-- %s -->" % category)
+            lines.extend(self.opf_element_line(item, ("media-type", "id", "href", "properties")) for item in items)
+            lines.append("")
+        lines.append("</manifest>")
+        return "\n".join(lines)
+
+    def serialize_opf_spine(self, spine):
+        attrs = self.opf_attrs(spine, ("toc", "page-progression-direction"))
+        lines = ["<spine%s>" % attrs, ""]
+        lines.extend(self.opf_element_line(itemref, ("idref", "linear", "properties")) for itemref in spine)
+        lines.extend(["", "</spine>"])
+        return "\n".join(lines)
+
+    def serialize_standard_opf(self, package):
+        metadata = package.find("metadata")
+        manifest = package.find("manifest")
+        spine = package.find("spine")
+        lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<package']
+        lines.append(' xmlns="%s"' % OPF_NS_URI)
+        lines.append(' version="%s"' % package.get("version", "3.0"))
+        xml_lang = package.get(XML_LANG)
+        if xml_lang:
+            lines.append(' xml:lang="%s"' % xml.sax.saxutils.escape(xml_lang, {'"': '&quot;'}))
+        lines.append(' unique-identifier="%s"' % package.get("unique-identifier", "ASIN"))
+        prefix_value = package.get("prefix")
+        if prefix_value:
+            prefix_lines = prefix_value.split("\n")
+            lines.append(' prefix="%s' % xml.sax.saxutils.escape(prefix_lines[0], {'"': '&quot;'}))
+            for pfx in prefix_lines[1:]:
+                lines.append('         %s' % xml.sax.saxutils.escape(pfx, {'"': '&quot;'}))
+            lines[-1] += '"'
+        lines.extend([">", ""])
+        lines.append(self.serialize_opf_metadata(metadata))
+        lines.append("")
+        lines.append(self.serialize_opf_manifest(manifest))
+        lines.append("")
+        lines.append(self.serialize_opf_spine(spine))
+        lines.append("")
+        lines.append("</package>")
+        return ("\n".join(lines) + "\n").encode("utf-8")
+
     def create_opf(self):
 
         def add_metadata_meta_name_content(name, content):
@@ -1241,6 +1749,8 @@ class EPUB_Output(object):
         }
         package = etree.Element(qname(OPF_NS_URI, "package"), nsmap=OPF_NAMESPACES, attrib={
             "version": ("2.0" if self.generate_epub2 else "3.0"), "unique-identifier": "ASIN"})
+        if not self.generate_epub2:
+            package.set(XML_LANG, self.language if self.language else "ja")
 
         metadata = etree.SubElement(package, "metadata")
 
@@ -1250,10 +1760,9 @@ class EPUB_Output(object):
         if self.uid.startswith("urn:uuid:") and self.generate_epub2:
             identifier.set(qname(ALT_OPF_NS_URI, "scheme"), "uuid")
 
-        title = etree.SubElement(metadata, qname(DC_NS_URI, "title"))
+        title = etree.SubElement(metadata, qname(DC_NS_URI, "title"), attrib={"id": "title"})
         title.text = self.title
         if self.title_pronunciation and not self.generate_epub2:
-            title.set("id", "title")
             add_metadata_meta_refines_property("#title", "file-as", self.title_pronunciation)
 
         for i, author in enumerate(self.authors):
@@ -1261,7 +1770,7 @@ class EPUB_Output(object):
             creator.text = author
 
             if not self.generate_epub2:
-                author_id = "creator%d" % i
+                author_id = "creator%02d" % (i + 1)
                 creator.set("id", author_id)
 
                 add_metadata_meta_refines_property("#" + author_id, "role", "aut", prefix("marc:relators"))
@@ -1275,7 +1784,7 @@ class EPUB_Output(object):
         language.text = self.language if self.language else "en"
 
         if self.publisher:
-            publisher = etree.SubElement(metadata, qname(DC_NS_URI, "publisher"))
+            publisher = etree.SubElement(metadata, qname(DC_NS_URI, "publisher"), attrib={"id": "publisher"})
             publisher.text = self.publisher
 
         if self.pubdate:
@@ -1300,6 +1809,8 @@ class EPUB_Output(object):
 
         if not self.generate_epub2:
             add_metadata_meta_property("dcterms:modified", datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z")
+            add_metadata_meta_property("ebpaj:guide-version", "1.1.4")
+            add_metadata_meta_property("dpfj:guide-version", "1.1.4")
 
         if self.fixed_layout:
             if not self.generate_epub2:
@@ -1377,8 +1888,17 @@ class EPUB_Output(object):
             etree.SubElement(x_metadata, "output", attrib={
                 "content-type": "application/x-mobipocket-subscription-magazine", "encoding": "utf-8"})
 
-        if used_prefixes:
-            package.set("prefix", " ".join(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p]) for p in sorted(list(used_prefixes))]))
+        ebpaj_prefixes = collections.OrderedDict([
+            ("ebpaj", "http://www.ebpaj.jp/"),
+            ("dpfj", "https://www.dpfj.or.jp/"),
+            ])
+        for pfx, uri in ebpaj_prefixes.items():
+            if pfx in used_prefixes:
+                used_prefixes.discard(pfx)
+        prefix_items = ["%s: %s" % item for item in ebpaj_prefixes.items()]
+        prefix_items.extend(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p]) for p in sorted(list(used_prefixes))])
+        if prefix_items and not self.generate_epub2:
+            package.set("prefix", "\n".join(prefix_items))
 
         man = etree.SubElement(package, "manifest")
         toc_idref = None
@@ -1456,20 +1976,28 @@ class EPUB_Output(object):
 
         etree.cleanup_namespaces(package)
 
-        data = etree.tostring(package, encoding="utf-8", pretty_print=True, xml_declaration=True)
-        data = data.replace(ALT_OPF_NS_URI.encode("utf-8"), OPF_NS_URI.encode("utf-8"))
+        if self.generate_epub2:
+            data = etree.tostring(package, encoding="utf-8", pretty_print=True, xml_declaration=True)
+            data = data.replace(ALT_OPF_NS_URI.encode("utf-8"), OPF_NS_URI.encode("utf-8"))
+        else:
+            data = self.serialize_standard_opf(package)
 
         self.add_oebps_file(self.OPF_FILEPATH, data, "application/oebps-package+xml")
 
     def container_xml(self):
-        NS_URI = "urn:oasis:names:tc:opendocument:xmlns:container"
-        container = etree.Element(qname(NS_URI, "container"), nsmap={None: NS_URI}, attrib={"version": "1.0"})
-        rootfiles = etree.SubElement(container, "rootfiles")
-        etree.SubElement(rootfiles, "rootfile", attrib={
-            "full-path": (self.OEBPS_DIR + self.OPF_FILEPATH),
-            "media-type": "application/oebps-package+xml"})
-
-        return etree.tostring(container, encoding="utf-8", pretty_print=True, xml_declaration=True)
+        return ("""<?xml version="1.0"?>
+<container
+ version="1.0"
+ xmlns="urn:oasis:names:tc:opendocument:xmlns:container"
+>
+<rootfiles>
+<rootfile
+ full-path="%s"
+ media-type="application/oebps-package+xml"
+/>
+</rootfiles>
+</container>
+""" % (self.OEBPS_DIR + self.OPF_FILEPATH)).encode("utf-8")
 
     def create_ncx(self):
         doctype = (
@@ -1590,23 +2118,28 @@ class EPUB_Output(object):
 
         book_part = self.new_book_part(filename=filename, linear=None)
         book_part.is_nav = True
+        book_part.html.set(XML_LANG, self.language if self.language else "ja")
 
         body = etree.SubElement(book_part.html, "body")
+        body.text = "\n"
 
         nav = etree.SubElement(body, "nav")
         nav.set(EPUB_TYPE, "toc")
+        nav.set("id", "toc")
+        nav.tail = "\n"
 
         if not self.is_magazine:
             self.hide_element(nav)
 
         h1 = etree.SubElement(nav, "h1")
-        h1.text = "Table of contents"
+        h1.text = "Navigation"
 
         self.create_nav_list(nav, self.ncx_toc, book_part)
 
         if self.guide:
             nav = etree.SubElement(body, "nav")
             nav.set(EPUB_TYPE, "landmarks")
+            nav.tail = "\n"
 
             if not self.is_magazine:
                 self.hide_element(nav)
@@ -1629,6 +2162,7 @@ class EPUB_Output(object):
         if len(self.pagemap) > 0:
             nav = etree.SubElement(body, "nav")
             nav.set(EPUB_TYPE, "page-list")
+            nav.tail = "\n"
 
             if not self.is_magazine:
                 self.hide_element(nav)
