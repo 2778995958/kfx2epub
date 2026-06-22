@@ -1189,7 +1189,13 @@ class EPUB_Output(object):
             log.warning("Fixed-layout page %s has %d image sources; keeping original XHTML" % (book_part.filename, len(image_sources)))
             return None, None, None
 
-        return image_sources[0]
+        src, width, height = image_sources[0]
+        filename = get_url_filename(urlabspath(src, ref_from=book_part.filename))
+        filename = remove_url_fragment(filename or "")
+        if filename:
+            self.original_dom_image_roles[filename] = "illustration"
+
+        return src, width, height
 
     def order_fixed_layout_head(self, book_part, head):
         self.link_css_file(book_part, self.FIXED_LAYOUT_CSS_FILEPATH)
