@@ -35,6 +35,20 @@
 - `[著者] タイトル.epub` 形式で出力ファイル名を自動生成します。
 - ファイル名に使えない文字を自動処理します。
 
+## 依存パッケージ
+
+Python 3.10 以上を推奨します。
+
+安全側のインストールコマンド：
+
+```bash
+python -m pip install lxml Pillow pypdf
+```
+
+- `lxml`：EPUB / XHTML / OPF などの XML 構造を処理します。
+- `Pillow`：画像の読み込み、サイズ判定、変換を処理します。
+- `pypdf`：PDF 関連リソースを処理します。プロジェクト内にも bundled 版がありますが、別途インストールしておくと安全です。
+
 ## 使い方
 
 ### 実行方法
@@ -104,6 +118,16 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 ```text
 [山田太郎] サンプルタイトル.epub
 ```
+
+出力フォルダー内に同名の EPUB がすでに存在する場合、元のファイルは上書きせず、出力フォルダー内の重複ファイル名用フォルダーへ順番に保存します。
+
+```text
+archived_epub/dupname1/[著者] タイトル.epub
+archived_epub/dupname2/[著者] タイトル.epub
+archived_epub/dupname3/[著者] タイトル.epub
+```
+
+重複判定は個別のファイル名ごとに行います。異なる書籍がそれぞれ初めて重複した場合は、すべて `dupname1` に保存されます。同じ書籍がさらに重複した場合のみ、`dupname2`、`dupname3` のように順番に使用します。ある `dupnameN` フォルダー内の同名ファイルを削除した場合、後の同名書籍の変換でそのフォルダーが再利用されることがあります。
 
 ## EPUB 内部ファイル名の規則
 
