@@ -35,6 +35,20 @@
 - 以 `[作者] 書名.epub` 的格式自動命名輸出
 - 會自動處理檔名中的非法字元
 
+## 依賴套件
+
+建議使用 Python 3.10 以上版本。
+
+保險版安裝指令：
+
+```bash
+python -m pip install lxml Pillow pypdf
+```
+
+- `lxml`：處理 EPUB / XHTML / OPF 等 XML 結構。
+- `Pillow`：處理圖片讀取、尺寸判斷與轉換。
+- `pypdf`：處理 PDF 相關資源；專案內已有 bundled 版本，額外安裝可作為保險。
+
 ## 使用方法
 
 ### 執行方式
@@ -104,6 +118,16 @@ python convert_kfx2epub.py D:/books/kfx D:/books/epub
 ```text
 [山田太郎] 範例書名.epub
 ```
+
+若輸出目錄中已存在同名 EPUB，工具不會覆蓋原檔，而會依序放入輸出目錄下的重複檔名資料夾：
+
+```text
+archived_epub/dupname1/[作者] 書名.epub
+archived_epub/dupname2/[作者] 書名.epub
+archived_epub/dupname3/[作者] 書名.epub
+```
+
+重複判斷以單一檔名為單位。不同書籍若各自第一次重複，會一起放在 `dupname1`；同一本書再次重複時，才會依序使用 `dupname2`、`dupname3`。如果某個 `dupnameN` 中的同名檔被刪除，之後再轉換同名書籍時可能會重新使用該資料夾。
 
 ## EPUB 內部檔名規則
 

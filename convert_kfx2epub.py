@@ -29,6 +29,21 @@ def sanitize_filename(name):
     return name.translate(table)
 
 
+def unique_output_file(output_path, clean_filename):
+    output_file = output_path / clean_filename
+    if not output_file.exists():
+        return output_file
+
+    index = 1
+    while True:
+        duplicate_folder = output_path / f"dupname{index}"
+        output_file = duplicate_folder / clean_filename
+        if not output_file.exists():
+            duplicate_folder.mkdir(parents=True, exist_ok=True)
+            return output_file
+        index += 1
+
+
 def batch_convert_kfx_to_epub(input_dir, output_dir):
     """
     Convert a single KFX/KFX-ZIP file, or all KFX/KFX-ZIP files in a folder, to EPUB.
@@ -79,9 +94,12 @@ def batch_convert_kfx_to_epub(input_dir, output_dir):
 
             raw_filename = f"[{author}] {title}"
             clean_filename = sanitize_filename(raw_filename) + ".epub"
-            output_file = output_path / clean_filename
+            output_file = unique_output_file(output_path, clean_filename)
 
-            print(f"📝 Expected output filename: {clean_filename}")
+            if output_file.parent != output_path:
+                print(f"📝 Expected output filename: {output_file.parent.name}/{clean_filename}")
+            else:
+                print(f"📝 Expected output filename: {clean_filename}")
 
             epub_data = converter.decompile_to_epub()
             book.final_actions()

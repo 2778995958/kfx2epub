@@ -35,6 +35,20 @@ This tool is intended only for Japanese books.
 - Automatically names output files as `[Author] Book Title.epub`.
 - Automatically handles illegal filename characters.
 
+## Dependencies
+
+Python 3.10 or later is recommended.
+
+Safe installation command:
+
+```bash
+python -m pip install lxml Pillow pypdf
+```
+
+- `lxml`: handles EPUB / XHTML / OPF XML structures.
+- `Pillow`: handles image loading, size detection, and conversion.
+- `pypdf`: handles PDF-related resources; the project already includes a bundled copy, but installing it separately is a safe fallback.
+
 ## Usage
 
 ### Command
@@ -104,6 +118,16 @@ Example:
 ```text
 [Yamada Taro] Sample Book.epub
 ```
+
+If an EPUB with the same filename already exists in the output folder, the tool does not overwrite it. Instead, it places the duplicate in sequential duplicate-name folders under the output folder:
+
+```text
+archived_epub/dupname1/[Author] Book Title.epub
+archived_epub/dupname2/[Author] Book Title.epub
+archived_epub/dupname3/[Author] Book Title.epub
+```
+
+Duplicate detection is handled per individual filename. If different books each duplicate once, they are all placed in `dupname1`; the same book uses `dupname2`, `dupname3`, and so on only when that same filename is duplicated again. If a same-named file is deleted from a `dupnameN` folder, that folder may be reused by a later conversion of the same filename.
 
 ## EPUB Internal Filename Rules
 
