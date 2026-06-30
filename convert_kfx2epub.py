@@ -2,6 +2,17 @@ import argparse
 import sys
 from pathlib import Path
 
+
+def app_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent.resolve()
+    return Path(__file__).parent.resolve()
+
+
+APP_DIR = app_dir()
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
 from kfxlib import YJ_Book
 from kfxlib.yj_to_epub import KFX_EPUB
 
@@ -125,7 +136,7 @@ def batch_convert_kfx_to_epub(input_dir, output_dir):
 
 
 if __name__ == "__main__":
-    script_dir = Path(__file__).parent.resolve()
+    script_dir = APP_DIR
 
     parser = argparse.ArgumentParser(
         description=(
