@@ -42,12 +42,13 @@
 保險版安裝指令：
 
 ```bash
-python -m pip install lxml Pillow pypdf
+python -m pip install lxml Pillow pypdf beautifulsoup4
 ```
 
 - `lxml`：處理 EPUB / XHTML / OPF 等 XML 結構。
 - `Pillow`：處理圖片讀取、尺寸判斷與轉換。
 - `pypdf`：處理 PDF 相關資源；專案內已有 bundled 版本，額外安裝可作為保險。
+- `beautifulsoup4`：提供 `lxml.html.soupparser` 相關路徑的保險依賴。
 
 ## 使用方法
 
@@ -57,14 +58,29 @@ python -m pip install lxml Pillow pypdf
 python convert_kfx2epub.py [input_dir_or_file] [output_dir]
 ```
 
+若使用 Windows portable 版本，請保留 `convert_kfx2epub.exe` 旁邊的 `kfxlib/` 資料夾，並改用：
+
+```powershell
+./convert_kfx2epub.exe [input_dir_or_file] [output_dir]
+```
+
+Portable 版本的資料夾結構應類似：
+
+```text
+convert_kfx2epub-portable/
+  convert_kfx2epub.exe
+  kfxlib/
+    styles/
+```
+
 ### 參數
 
 - `input_dir_or_file`
   - 輸入資料夾，或單一 `.kfx` / `.kfx-zip` 檔案
-  - 預設為腳本同目錄下的 `archived_kfx`
+  - 預設為腳本或 exe 同目錄下的 `archived_kfx`
 - `output_dir`
   - 輸出目錄
-  - 預設為腳本同目錄下的 `archived_epub`
+  - 預設為腳本或 exe 同目錄下的 `archived_epub`
 
 ### 範例
 
@@ -90,7 +106,7 @@ python convert_kfx2epub.py D:/books/sample.kfx-zip
 
 或直接把單一 `.kfx` / `.kfx-zip` 檔案、或整個資料夾拖曳到 `convert_kfx2epub.py` 上執行。
 
-這時候輸出仍會寫到 `convert_kfx2epub.py` 同目錄下的 `archived_epub`。
+這時候輸出仍會寫到 `convert_kfx2epub.py` 或 `convert_kfx2epub.exe` 同目錄下的 `archived_epub`。
 
 #### 3. 指定輸入與輸出目錄
 
@@ -168,6 +184,36 @@ archived_epub/dupname3/[作者] 書名.epub
 - 輸入資料夾應只放要轉換的 KFX 檔案。
 - 為避免轉錯檔、輸入來源不乾淨或轉換結果不如預期，建議保留原始 `.kfx` / `.kfx-zip` 檔案，方便重新轉換。
 - 若遇到重複 fragment 或容器異常，通常是KFX打包了2份azw檔，建議重新取得原始檔案。
+
+## Windows portable EXE 建置
+
+本專案可建置成 `convert_kfx2epub.exe` 加外部 `kfxlib/` 的 portable 資料夾。這不是單一 exe 檔；執行時必須保留 exe 旁邊的完整 `kfxlib/`，尤其是 `kfxlib/styles/` 內的 CSS 檔。
+
+建置範例：
+
+```powershell
+python -m venv .venv
+. .venv/Scripts/Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-build.txt
+./packaging/windows-exe/build-windows-exe.ps1
+```
+
+也可以直接執行批次檔：
+
+```bat
+packaging\windows-exe\build-windows-exe.bat
+```
+
+輸出會建立在：
+
+```text
+dist/convert_kfx2epub-portable/
+  convert_kfx2epub.exe
+  kfxlib/
+```
+
+發佈時建議壓縮整個 `convert_kfx2epub-portable/` 資料夾，不要只複製 exe。
 
 ## 專案結構
 

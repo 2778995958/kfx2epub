@@ -648,7 +648,7 @@ def plugin_modules_path():
     if __file__ == "<calibre Plugin Loader>":
         return sys.path[0] + "/kfxlib/calibre-plugin-modules"
 
-    return __file__.rpartition("/")[0] + "/calibre-plugin-modules"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibre-plugin-modules")
 
 
 def add_plugin_path():
