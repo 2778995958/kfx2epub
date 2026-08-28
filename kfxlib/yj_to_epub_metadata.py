@@ -8,7 +8,7 @@ from .yj_structure import (METADATA_NAMES, SYM_TYPE)
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 ORIENTATIONS = {
@@ -26,6 +26,7 @@ class KFX_EPUB_Metadata(object):
         self.is_pdf_backed_fixed_layout = False
         self.cde_content_type = ""
         self.nmdl_template_id = None
+        self.dictionary_aux_data_id = None
 
     def process_document_data(self):
         document_data = self.book_data.pop("$538", {})
@@ -66,7 +67,16 @@ class KFX_EPUB_Metadata(object):
             if auto_contrast != "$573":
                 log.error("Unexpected auto_contrast: %s" % auto_contrast)
 
-        document_data.pop("$597", None)
+        if "$597" in document_data:
+            for aux_type, aux_id in document_data.pop("$597").items():
+                if aux_type == "$613":
+                    pass
+                elif aux_type == "$614":
+                    pass
+                elif aux_type == "$697":
+                    self.dictionary_aux_data_id = aux_id
+                else:
+                    log.warning("Unexpected auxiliary_data reference type: %s" % aux_type)
 
         document_data.pop("yj.semantics.book_theme_metadata", None)
 

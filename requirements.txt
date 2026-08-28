@@ -1,4 +1,4 @@
 lxml
 Pillow
-pypdf
+pypdf==6.16.1
 beautifulsoup4

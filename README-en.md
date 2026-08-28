@@ -42,12 +42,13 @@ Python 3.10 or later is recommended.
 Safe installation command:
 
 ```bash
-python -m pip install lxml Pillow pypdf
+python -m pip install lxml Pillow pypdf==6.16.1 beautifulsoup4
 ```
 
 - `lxml`: handles EPUB / XHTML / OPF XML structures.
 - `Pillow`: handles image loading, size detection, and conversion.
 - `pypdf`: handles PDF-related resources; the project already includes a bundled copy, but installing it separately is a safe fallback.
+- `beautifulsoup4`: provides the `lxml.html.soupparser` fallback path.
 
 ## Usage
 

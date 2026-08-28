@@ -42,7 +42,7 @@
 保險版安裝指令：
 
 ```bash
-python -m pip install lxml Pillow pypdf beautifulsoup4
+python -m pip install lxml Pillow pypdf==6.16.1 beautifulsoup4
 ```
 
 - `lxml`：處理 EPUB / XHTML / OPF 等 XML 結構。
