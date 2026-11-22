@@ -41,6 +41,7 @@ EPUB3_VOCABULARY_OF_GUIDE_TYPE = {
     "cover": "cover",
     "text": "bodymatter",
     "toc": "toc",
+    "colophon": "colophon",
     }
 
 DEFAULT_LABEL_OF_GUIDE_TYPE = {
@@ -2155,7 +2156,7 @@ class EPUB_Output(object):
 
             ol = etree.SubElement(nav, "ol")
 
-            for g in sorted(self.guide, key=lambda ge: (ge.guide_type, ge.title)):
+            for g in self.guide:
                 li = etree.SubElement(ol, "li")
                 a = etree.SubElement(li, "a")
 

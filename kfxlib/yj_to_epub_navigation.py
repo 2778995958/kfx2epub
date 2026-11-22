@@ -70,6 +70,7 @@ class KFX_EPUB_Navigation(object):
         self.nav_container_section = {}
         self.navto_anchor = {}
         self.toc_entry_count = 0
+        self.untyped_landmark_count = 0
         self.page_label_anchor_id = {}
         self.reported_duplicate_page_label = set()
 
@@ -143,18 +144,25 @@ class KFX_EPUB_Navigation(object):
                     target_position = self.get_position(nav_unit.pop("$246"))
                     landmark_type = nav_unit.pop("$238", None)
 
-                    if landmark_type:
-                        guide_type = GUIDE_TYPE_OF_LANDMARK_TYPE.get(landmark_type)
-                        if guide_type is None:
-                            log.warning("Unexpected landmark_type: %s" % landmark_type)
-                            guide_type = landmark_type
+                    if landmark_type == "$233":
+                        # KFX 的封面標籤是固定字串 cover-nav-unit，改用固定字樣。
+                        guide_type = "cover"
+                        label = "表紙"
+                    elif landmark_type == "$212":
+                        guide_type = "toc"
+                    elif landmark_type is None:
+                        # 無型別的 landmark 依 KFX 出現順序：第一個是本編，第二個是奧付。
+                        guide_type = "text" if self.untyped_landmark_count == 0 else "colophon"
+                        self.untyped_landmark_count += 1
+                        if not label:
+                            continue
+                    else:
+                        # $396 / $269 等位置型 landmark 不使用（多半會落在封面）。
+                        continue
 
-                        if label == "cover-nav-unit":
-                            label = ""
-
-                        anchor_name = self.unique_anchor_name(str(nav_unit_name) or guide_type)
-                        self.register_anchor(anchor_name, target_position)
-                        self.add_guide_entry(guide_type, label, anchor=anchor_name)
+                    anchor_name = self.unique_anchor_name(str(nav_unit_name) or guide_type)
+                    self.register_anchor(anchor_name, target_position)
+                    self.add_guide_entry(guide_type, label, anchor=anchor_name)
 
                 elif nav_type == "$237":
                     label = self.get_representation(nav_unit)[0]
