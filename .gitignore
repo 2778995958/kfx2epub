@@ -23,5 +23,19 @@ __pycache__/
 *.spec
 build/
 
+# .NET build output
+bin/
+obj/
+artifacts/
+TestResults/
+
+# Visual Studio / Rider local state
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
 # Keep the portable build spec tracked
 !packaging/windows-exe/*.spec
