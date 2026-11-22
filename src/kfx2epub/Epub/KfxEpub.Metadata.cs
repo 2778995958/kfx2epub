@@ -166,10 +166,11 @@ public partial class KfxEpub
                 if (string.IsNullOrEmpty(Asin)) Asin = value.ToStr() ?? "";
                 break;
             case "kindle_title_metadata/author":
-                if (value is string author && author.Length > 0) Authors.Insert(0, author);
+                // 依 KFX 原始順序保留：第一位是主要作者，後續為插畫等協力者。
+                if (value is string author && author.Length > 0) Authors.Add(author);
                 break;
             case "kindle_title_metadata/author_pronunciation":
-                if (value is string pron && pron.Length > 0) AuthorPronunciations.Insert(0, pron);
+                if (value is string pron && pron.Length > 0) AuthorPronunciations.Add(pron);
                 break;
             case "author":
                 if (Authors.Count == 0 && value is string authors)

@@ -1327,7 +1327,7 @@ public partial class KfxEpub
             if (!IsMagazine) HideElement(nav);
             XhtmlUtil.SubElement(nav, "h2").Text = "Guide";
             var ol = XhtmlUtil.SubElement(nav, "ol");
-            foreach (var guide in Guide.OrderBy(g => g.GuideType).ThenBy(g => g.Title))
+            foreach (var guide in Guide)
             {
                 var li = XhtmlUtil.SubElement(ol, "li");
                 var a = XhtmlUtil.SubElement(li, "a");
@@ -1419,6 +1419,6 @@ public partial class KfxEpub
     public static readonly Dictionary<string, int> TocPriorityOfGuideType = new() { ["toc"] = 1, ["text"] = 2, ["cover"] = 3 };
     public static readonly Dictionary<string, string> Epub3VocabularyOfGuideType = new()
     {
-        ["cover"] = "cover", ["text"] = "bodymatter", ["toc"] = "toc"
+        ["cover"] = "cover", ["text"] = "bodymatter", ["toc"] = "toc", ["colophon"] = "colophon"
     };
 }

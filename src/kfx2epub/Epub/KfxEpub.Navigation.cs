@@ -20,6 +20,7 @@ public partial class KfxEpub
     public int TocEntryCount;
     public Dictionary<string, string> PageLabelAnchorId { get; } = new();
     public bool ApproximatePagesRemoved;
+    public int NavUntypedLandmarkCount;
 
     public void ProcessAnchors()
     {
@@ -64,6 +65,7 @@ public partial class KfxEpub
         NavContainerSection.Clear();
         NavtoAnchor.Clear();
         TocEntryCount = 0;
+        NavUntypedLandmarkCount = 0;
         PageLabelAnchorId.Clear();
 
         if (BookData.TryGetValue("$390", out var sectionNavValue) && sectionNavValue is List<object> sectionNavList)
@@ -161,14 +163,37 @@ public partial class KfxEpub
                     var unitName = navUnit.Pop("$240", label).ToStr() ?? label;
                     var position = GetPosition(navUnit.Pop("$246"));
                     var landmarkType = navUnit.Pop("$238").ToStr();
-                    if (landmarkType is not null)
+
+                    string guideType;
+                    string title;
+                    if (landmarkType == "$233")
                     {
-                        var guideType = GuideTypeOfLandmarkType.GetValueOrDefault(landmarkType, landmarkType);
-                        if (label == "cover-nav-unit") label = "";
-                        var anchorName = UniqueAnchorName(unitName.Length > 0 ? unitName : guideType);
-                        RegisterAnchor(anchorName, position);
-                        AddGuideEntry(guideType, label, anchor: anchorName);
+                        // KFX 的封面標籤是固定字串 cover-nav-unit，改用固定字樣。
+                        guideType = "cover";
+                        title = "表紙";
                     }
+                    else if (landmarkType == "$212")
+                    {
+                        guideType = "toc";
+                        title = label;
+                    }
+                    else if (landmarkType is null)
+                    {
+                        // 無型別的 landmark 依 KFX 出現順序：第一個是本編，第二個是奧付。
+                        guideType = NavUntypedLandmarkCount == 0 ? "text" : "colophon";
+                        title = label;
+                        NavUntypedLandmarkCount++;
+                        if (title.Length == 0) continue;
+                    }
+                    else
+                    {
+                        // $396 / $269 等位置型 landmark 不使用（多半會落在封面）。
+                        continue;
+                    }
+
+                    var anchorName = UniqueAnchorName(unitName.Length > 0 ? unitName : guideType);
+                    RegisterAnchor(anchorName, position);
+                    AddGuideEntry(guideType, title, anchor: anchorName);
                 }
                 else if (navType == "$237")
                 {
