@@ -837,6 +837,8 @@ public partial class KfxEpub
 
             FinalizeXhtmlStructure(bookPart, head, body);
             ConsolidateHtml(body);
+            SplitLongTcySpans(body);
+            FlattenRubyBases(body);
             BeautifyHtml(bookPart);
         }
 
@@ -1168,7 +1170,8 @@ public partial class KfxEpub
 
                     var next = e.NextSibling();
                     while (string.IsNullOrEmpty(e.Tail) && next is not null && next.Name == e.Name &&
-                           next.Namespace == e.Namespace && AttributesEqual(e, next))
+                           next.Namespace == e.Namespace && AttributesEqual(e, next) &&
+                           !IsTextCombineElement(e) && !IsTextCombineElement(next))
                     {
                         if (!string.IsNullOrEmpty(next.Text))
                         {
@@ -1259,6 +1262,46 @@ public partial class KfxEpub
         }
 
         return true;
+    }
+
+    private bool IsTextCombineElement(XNode e)
+    {
+        if ((e.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("tcy")) return true;
+        return GeneratedClassStyle(e)?.Get("text-combine-upright") == "all";
+    }
+
+    private void SplitLongTcySpans(XNode body)
+    {
+        foreach (var span in body.FindDescendants("span").ToList())
+        {
+            if (!(span.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries).Contains("tcy")) continue;
+            SplitTcySpan(span);
+        }
+    }
+
+    // bw 的 ruby 不使用 <rb>：基準文字直接放在 <ruby> 內。
+    // 只有無屬性的純文字 rb 才拆掉，避免遺失樣式或巢狀結構。
+    private void FlattenRubyBases(XNode body)
+    {
+        foreach (var rb in body.FindDescendants("rb").ToList())
+        {
+            if (rb.Attributes.Count > 0 || rb.Children.Count > 0) continue;
+            var parent = rb.Parent;
+            if (parent is null) continue;
+
+            var index = parent.Children.IndexOf(rb);
+            var text = (rb.Text ?? "") + (rb.Tail ?? "");
+            parent.RemoveChild(rb);
+            if (index > 0)
+            {
+                var previous = parent.Children[index - 1];
+                previous.Tail = (previous.Tail ?? "") + text;
+            }
+            else
+            {
+                parent.Text = (parent.Text ?? "") + text;
+            }
+        }
     }
 
     public void BeautifyHtml(BookPart bookPart)

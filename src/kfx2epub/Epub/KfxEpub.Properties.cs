@@ -856,13 +856,60 @@ public partial class KfxEpub
     {
         foreach (var bookPart in BookParts)
         {
-            foreach (var span in bookPart.Body().FindDescendants("span"))
+            foreach (var span in bookPart.Body().FindDescendants("span").ToList())
             {
+                var classes = (span.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 var classStyle = GeneratedClassStyle(span);
-                if (classStyle is null) continue;
-                if (classStyle.Properties.Count == 1 && classStyle.Get("text-combine-upright") == "all") span.Set("class", "tcy");
+                var isTcy = classes.Contains("tcy") || classStyle?.Get("text-combine-upright") == "all";
+                if (!isTcy) continue;
+
+                if (classStyle is not null && classStyle.Get("text-combine-upright") == "all" &&
+                    classStyle.Properties.Keys.All(k => k is "text-combine-upright" or "word-break" or
+                        "-webkit-word-break" or "-epub-word-break"))
+                {
+                    // word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
+                    span.Set("class", "tcy");
+                }
+                else if (!classes.Contains("tcy"))
+                {
+                    // 保留原本的樣式 class，再補上 tcy；ConsolidateHtml 會據此避免合併。
+                    span.Set("class", string.Join(" ", classes.Append("tcy")));
+                }
+
+                SplitTcySpan(span);
             }
         }
+    }
+
+    // 縦中横以 2 個符號為一組；KFX 有時會給出 4 個字元一組，需拆回 2+2。
+    private static void SplitTcySpan(XNode span)
+    {
+        if (span.Children.Count > 0) return;
+        var text = span.Text ?? "";
+        var length = TextUtil.UnicodeLen(text);
+        if (length <= 2) return;
+
+        var parent = span.Parent;
+        if (parent is null) return;
+        var index = parent.Children.IndexOf(span);
+        var classes = span.Get("class", "");
+        var style = span.Get("style", "");
+        var tail = span.Tail;
+
+        parent.RemoveChild(span);
+        var inserted = 0;
+        for (var offset = 0; offset < length; offset += 2)
+        {
+            var chunk = TextUtil.UnicodeSlice(text, offset, Math.Min(offset + 2, length));
+            var tcySpan = new XNode("span");
+            if (!string.IsNullOrEmpty(classes)) tcySpan.Set("class", classes);
+            if (!string.IsNullOrEmpty(style)) tcySpan.Set("style", style);
+            tcySpan.Text = chunk;
+            parent.Insert(index + inserted, tcySpan);
+            inserted++;
+        }
+
+        if (!string.IsNullOrEmpty(tail)) parent.Children[index + inserted - 1].Tail = tail;
     }
 
     public void NormalizeFitImageWrappers()

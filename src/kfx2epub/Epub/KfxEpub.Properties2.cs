@@ -14,6 +14,23 @@ public partial class KfxEpub
     public HashSet<string> MissingSpecialClasses { get; } = new();
     public HashSet<string> VerticalRlClasses { get; set; } = new();
 
+    // KFX 以區塊方向的 lh margin 表示 bw 的空段落。這裡先標記，
+    // 等 SimplifyStyles 決定元素的最終標籤後，再插入 <p><br/></p>。
+    private const string BlankBeforeProperty = "-kfx-blank-before";
+    private const string BlankAfterProperty = "-kfx-blank-after";
+    private const string BlankOrigBeforeProperty = "-kfx-blank-orig-before";
+    private const string BlankOrigAfterProperty = "-kfx-blank-orig-after";
+    private const string BlankPropBeforeProperty = "-kfx-blank-prop-before";
+    private const string BlankPropAfterProperty = "-kfx-blank-prop-after";
+    private const decimal BlankLineRem = 1.05m;
+
+    private static readonly HashSet<string> BoxPaddingProperties = new()
+    {
+        "padding", "padding-top", "padding-right", "padding-bottom", "padding-left"
+    };
+
+    private string _pageWritingMode = "horizontal-tb";
+
     public void FixupStylesAndClasses()
     {
         CssRules = new Dictionary<string, Style>();
@@ -31,7 +48,9 @@ public partial class KfxEpub
                 heritable.Update(new Style(new Dictionary<string, string> { ["-kfx-attrib-xml-lang"] = lang }), true);
             }
 
+            _pageWritingMode = GetStyle(bookPart.Body()).Get("writing-mode", WritingMode) ?? WritingMode;
             SimplifyStyles(bookPart.Body(), bookPart, heritable);
+            ExpandBlockMargins(bookPart);
             AddCompositeAndEquivalentStyles(bookPart.Body(), bookPart);
         }
 
@@ -327,10 +346,42 @@ public partial class KfxEpub
             {
                 if (name == "line-height")
                 {
-                    if (quantity is >= 0.99m and <= 1.01m) style.Set(name, "normal");
-                    else style.Set(name, TextUtil.ValueStr(Math.Max(1.0m, quantity.Value * 1.2m)));
+                    // 與 bw 一致：不輸出 KFX 的 line-height，讓元素繼承 body 的 1.75。
+                    style.Pop(name);
+                    continue;
                 }
-                else style.Set(name, TextUtil.ValueStr(quantity.Value * 1.2m, "em"));
+
+                var writingMode = style.Get("writing-mode", _pageWritingMode);
+                if (BlockMarginSide(name, writingMode) is string side)
+                {
+                    var lines = CountBlankLines(elem, name, quantity.Value, style, writingMode);
+                    if (lines > 0)
+                    {
+                        style.Pop(name);
+                        AddBlankMarker(style, name, side, lines, quantity.Value * 1.2m);
+                        continue;
+                    }
+                }
+
+                style.Set(name, TextUtil.ValueStr(quantity.Value * 1.2m, "em"));
+            }
+            else if (unit == "em" && HasBoxBorderOrPadding(style))
+            {
+                // 框線方塊本身的 em margin 也可能帶一個空行（例如盜賊少女的特典框）。
+                var writingMode = style.Get("writing-mode", _pageWritingMode);
+                if (IsVerticalWritingMode(writingMode) && BlockMarginSide(name, writingMode) is string side)
+                {
+                    var fontSizeRem = ResolveFontSizeRem(style.Get("font-size"));
+                    var exactLines = quantity.Value * fontSizeRem / BlankLineRem;
+                    var rounded = (int)Math.Floor(exactLines + 0.5m);
+                    var lines = Math.Max(0, rounded - 1);
+                    if (lines > 0)
+                    {
+                        style.Pop(name);
+                        AddBlankMarker(style, name, side, lines, quantity.Value);
+                        continue;
+                    }
+                }
             }
 
             if (unit is "vh" or "vw")
@@ -571,6 +622,9 @@ public partial class KfxEpub
             if (style.Get(name) == inheritedProperties.Get(name, "")) style.Pop(name);
         }
 
+        // 與 bw 一致：不輸出 KFX 的 line-height，讓元素繼承 reset 的 body 1.75。
+        style.Pop("line-height");
+
         SetStyle(elem, style);
 
         containsBlock = containsBlock || elem.IsLocal("aside") || elem.IsLocal("caption") || elem.IsLocal("div") ||
@@ -628,6 +682,181 @@ public partial class KfxEpub
         }
 
         if (modified) SetStyle(elem, style);
+    }
+
+    // 依「區塊方向」判斷 margin 是否是空行。
+    // 直排的區塊方向是水平（右→左），橫排是垂直（上→下）。
+    private static string BlockMarginSide(string name, string writingMode)
+    {
+        var mode = writingMode ?? "horizontal-tb";
+        if (mode.StartsWith("vertical", StringComparison.Ordinal))
+        {
+            var rtl = mode.EndsWith("-rl", StringComparison.Ordinal);
+            if (name == (rtl ? "margin-right" : "margin-left")) return "before";
+            if (name == (rtl ? "margin-left" : "margin-right")) return "after";
+            return null;
+        }
+
+        if (name == "margin-top") return "before";
+        if (name == "margin-bottom") return "after";
+        return null;
+    }
+
+    private static bool IsVerticalWritingMode(string writingMode)
+        => writingMode is not null && writingMode.StartsWith("vertical", StringComparison.Ordinal);
+
+    private static decimal ResolveFontSizeRem(string value)
+    {
+        var (quantity, unit) = TextUtil.SplitValue(value ?? "");
+        if (quantity is null) return 1.0m;
+        return unit switch
+        {
+            "rem" or "em" => quantity.Value,
+            "%" => quantity.Value / 100m,
+            "px" => quantity.Value / 16m,
+            _ => 1.0m
+        };
+    }
+
+    private static bool HasBoxBorderOrPadding(Style style)
+    {
+        var hasBorder = false;
+        var hasPadding = false;
+        foreach (var (name, value) in style.Properties)
+        {
+            if (value is null) continue;
+            if (name is "border" or "border-top" or "border-right" or "border-bottom" or "border-left")
+            {
+                if (value is not ("none" or "0" or "0px")) hasBorder = true;
+            }
+            else if (name is "border-style" or "border-top-style" or "border-right-style" or
+                     "border-bottom-style" or "border-left-style")
+            {
+                if (value is not ("none" or "hidden")) hasBorder = true;
+            }
+            else if (BoxPaddingProperties.Contains(name))
+            {
+                if (value is not ("0" or "0px" or "0em" or "0%")) hasPadding = true;
+            }
+        }
+
+        if (hasBorder) return true;
+        if (!hasPadding) return false;
+
+        // 只有 padding 沒有框線時，通常只是版面間距（例如口絵頁的字下げ）；
+        // 有背景色/背景圖才視為真正的方塊。
+        var backgroundColor = style.Get("background-color", "transparent");
+        return backgroundColor is not (null or "transparent" or "#0" or "rgba(0,0,0,0)") ||
+               style.Get("background-image", "none") is not (null or "none");
+    }
+
+    private static bool IsFirstBlockAfterHr(XNode elem)
+    {
+        var previous = elem.PreviousSibling();
+        return previous is not null && previous.IsLocal("hr");
+    }
+
+    private int CountBlankLines(XNode elem, string name, decimal rawLh, Style style, string writingMode)
+    {
+        var isBox = !elem.IsLocal("hr") && HasBoxBorderOrPadding(style);
+        var fontSizeRem = ResolveFontSizeRem(style.Get("font-size"));
+        var exactLines = rawLh * 1.2m * fontSizeRem / BlankLineRem;
+        var rounded = (int)Math.Floor(exactLines + 0.5m);
+
+        if (isBox)
+        {
+            // 橫排頁面的框線方塊 margin 是版面間距，不是空行。
+            if (!IsVerticalWritingMode(writingMode)) return 0;
+            // 直排頁面的框線方塊 margin 會含一份方塊本身的間距；扣掉一行再判斷。
+            return Math.Max(0, rounded - 1);
+        }
+
+        if (rounded < 1) return 0;
+
+        if (IsVerticalWritingMode(writingMode)) return rounded;
+
+        // 橫排頁面的 margin-top/bottom 也常用於 colophon 的細部間距；
+        // 只接受接近整行的值，以及 hr 與緊接 hr 的區塊。
+        if (elem.IsLocal("hr") || IsFirstBlockAfterHr(elem)) return rounded;
+        return Math.Abs(exactLines - rounded) <= 0.05m * Math.Max(1, rounded) ? rounded : 0;
+    }
+
+    private static void AddBlankMarker(Style style, string propName, string side, int lines, decimal emValue)
+    {
+        var before = side == "before";
+        var key = before ? BlankBeforeProperty : BlankAfterProperty;
+        var origKey = before ? BlankOrigBeforeProperty : BlankOrigAfterProperty;
+        var propKey = before ? BlankPropBeforeProperty : BlankPropAfterProperty;
+        var existing = int.TryParse(style.Get(key), out var count) ? count : 0;
+        style.Set(key, (existing + lines).ToString(CultureInfo.InvariantCulture));
+        style.Set(origKey, TextUtil.ValueStr(emValue, "em"));
+        style.Set(propKey, propName);
+    }
+
+    public void ExpandBlockMargins(BookPart bookPart)
+    {
+        foreach (var elem in bookPart.Body().DescendantsAndSelf().ToList())
+        {
+            if (!elem.Has("style")) continue;
+            var style = GetStyle(elem);
+            if (!style.ContainsKey(BlankBeforeProperty) && !style.ContainsKey(BlankAfterProperty)) continue;
+
+            var before = style.Pop(BlankBeforeProperty);
+            var after = style.Pop(BlankAfterProperty);
+            var origBefore = style.Pop(BlankOrigBeforeProperty);
+            var origAfter = style.Pop(BlankOrigAfterProperty);
+            var propBefore = style.Pop(BlankPropBeforeProperty);
+            var propAfter = style.Pop(BlankPropAfterProperty);
+
+            if (!CanHostBlankParagraphs(elem))
+            {
+                if (origBefore is not null && propBefore is not null) style.Set(propBefore, origBefore);
+                if (origAfter is not null && propAfter is not null) style.Set(propAfter, origAfter);
+                SetStyle(elem, style);
+                continue;
+            }
+
+            SetStyle(elem, style);
+            var parent = elem.Parent;
+            if (parent is null) continue;
+            var index = elem.IndexInParent();
+            if (before is not null && int.TryParse(before, out var beforeCount) && beforeCount > 0)
+            {
+                for (var i = 0; i < beforeCount; i++) parent.Insert(index + i, CreateBlankParagraph());
+                index += beforeCount;
+            }
+
+            if (after is not null && int.TryParse(after, out var afterCount) && afterCount > 0)
+            {
+                for (var i = 0; i < afterCount; i++) parent.Insert(index + 1 + i, CreateBlankParagraph());
+            }
+        }
+    }
+
+    private static bool CanHostBlankParagraphs(XNode elem)
+    {
+        var parent = elem.Parent;
+        if (parent is null) return false;
+        if (parent.Name is not ("body" or "div" or "section" or "article" or "aside" or "blockquote" or "figure"))
+            return false;
+        if (elem.Name is not ("p" or "div" or "hr" or "figure" or "blockquote" or "aside" or "section" or "article" or "pre") &&
+            !Regex.IsMatch(elem.Name, "^h[1-6]$"))
+            return false;
+
+        foreach (var ancestor in elem.Ancestors())
+        {
+            if (ancestor.Name is "table" or "tr" or "td" or "th" or "p" or "span" or "a" or "li") return false;
+            if (ancestor.IsLocal("body")) break;
+        }
+
+        return true;
+    }
+
+    private static XNode CreateBlankParagraph()
+    {
+        var p = new XNode("p");
+        p.Append(new XNode("br"));
+        return p;
     }
 
     public bool AncestorOverridesTextAlign(XNode elem)

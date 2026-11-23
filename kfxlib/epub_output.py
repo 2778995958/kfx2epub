@@ -1400,6 +1400,9 @@ class EPUB_Output(object):
             if CONSOLIDATE_HTML:
                 self.consolidate_html(body)
 
+            self.split_long_tcy_spans(body)
+            self.flatten_ruby_bases(body)
+
             if BEAUTIFY_HTML:
                 self.beautify_html(book_part)
 
@@ -1465,7 +1468,8 @@ class EPUB_Output(object):
                     if e.tag in {"a", "b", "em", "i", "span", "strong", "sub", "sup", "u"}:
                         n = e.getnext()
                         while ((not e.tail) and (n is not None) and n.tag == e.tag and
-                                tuple(sorted(dict(e.attrib).items())) == tuple(sorted(dict(n.attrib).items()))):
+                                tuple(sorted(dict(e.attrib).items())) == tuple(sorted(dict(n.attrib).items())) and
+                                not self.is_text_combine_element(e) and not self.is_text_combine_element(n)):
 
                             if n.text:
                                 if len(e) > 0:
@@ -1528,6 +1532,37 @@ class EPUB_Output(object):
                             break
             else:
                 break
+
+    def is_text_combine_element(self, e):
+        if "tcy" in (e.get("class") or "").split():
+            return True
+        class_style = self.generated_class_style(e)
+        return class_style is not None and class_style.get("text-combine-upright") == "all"
+
+    def split_long_tcy_spans(self, body):
+        for span in list(body.iter("span")):
+            if "tcy" in (span.get("class") or "").split():
+                self.split_tcy_span(span)
+
+    # bw 的 ruby 不使用 <rb>：基準文字直接放在 <ruby> 內。
+    # 只有無屬性的純文字 rb 才拆掉，避免遺失樣式或巢狀結構。
+    def flatten_ruby_bases(self, body):
+        for rb in list(body.iter("rb")):
+            if len(rb.attrib) > 0 or len(rb) > 0:
+                continue
+
+            parent = rb.getparent()
+            if parent is None:
+                continue
+
+            index = parent.index(rb)
+            text = (rb.text or "") + (rb.tail or "")
+            parent.remove(rb)
+            if index > 0:
+                previous = parent[index - 1]
+                previous.tail = (previous.tail or "") + text
+            else:
+                parent.text = (parent.text or "") + text
 
     def beautify_html(self, book_part):
         html = book_part.html
