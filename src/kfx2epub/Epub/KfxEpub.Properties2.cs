@@ -201,6 +201,8 @@ public partial class KfxEpub
             styleClassNames[styleStr] = className;
         }
 
+        PruneRedundantClassProperties(sortedStyles, styleClassNames);
+
         foreach (var bookPart in BookParts)
         {
             foreach (var e in bookPart.Body().DescendantsAndSelf())
@@ -234,6 +236,75 @@ public partial class KfxEpub
         }
 
         UpdateVerticalRlClassUsage();
+    }
+
+    // 移除與電書協樣式表重複、或原版 EPUB 沒有的宣告，避免 style-kfx.css 多餘規則。
+    private void PruneRedundantClassProperties(List<(string StyleStr, Style Style, string ClassName)> sortedStyles,
+        Dictionary<string, string> styleClassNames)
+    {
+        // 記錄每個樣式被哪些元素使用，用元素結構判斷宣告是否可以省略。
+        var textOnlyInLinks = new Dictionary<string, bool>(StringComparer.Ordinal);
+        var onlyInHeadings = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var bookPart in BookParts)
+        {
+            foreach (var e in bookPart.Body().DescendantsAndSelf())
+            {
+                var styleStr = e.Get("style", "");
+                if (styleStr is null || !styleClassNames.ContainsKey(styleStr)) continue;
+
+                var inLinks = TextOnlyInsideLinks(e);
+                textOnlyInLinks[styleStr] = textOnlyInLinks.TryGetValue(styleStr, out var previousLink)
+                    ? previousLink && inLinks
+                    : inLinks;
+
+                var isHeading = e.Name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6";
+                onlyInHeadings[styleStr] = onlyInHeadings.TryGetValue(styleStr, out var previousHeading)
+                    ? previousHeading && isHeading
+                    : isHeading;
+            }
+        }
+
+        foreach (var (styleStr, style, _) in sortedStyles)
+        {
+            // page-break-inside 仍用於圖片外框的辨識（NormalizeFitImageWrappers），只在標題上省略。
+            if (onlyInHeadings.GetValueOrDefault(styleStr)) style.Pop("page-break-inside");
+
+            if (!textOnlyInLinks.GetValueOrDefault(styleStr)) continue;
+
+            // style-standard.css 的 a:link 已是 #0000ff。
+            if (style.Get("color") is "blue" or "#0000ff") style.Pop("color");
+            // .vrtl a / .hltr a 已提供方向正確的 overline / underline。
+            if (style.Get("text-decoration") == "overline") style.Pop("text-decoration");
+        }
+    }
+
+    // 判斷元素的可見文字是否全部位於 <a> 之內（連結的顏色與裝飾由樣式表控制）。
+    private static bool TextOnlyInsideLinks(XNode elem)
+    {
+        var hasText = false;
+
+        bool Walk(XNode node, bool inLink)
+        {
+            if (!string.IsNullOrWhiteSpace(node.Text))
+            {
+                hasText = true;
+                if (!inLink) return false;
+            }
+
+            foreach (var child in node.Children)
+            {
+                if (!Walk(child, inLink || child.IsLocal("a"))) return false;
+                if (!string.IsNullOrWhiteSpace(child.Tail))
+                {
+                    hasText = true;
+                    if (!inLink) return false;
+                }
+            }
+
+            return true;
+        }
+
+        return Walk(elem, elem.IsLocal("a")) && hasText;
     }
 
     public void UpdateVerticalRlClassUsage()

@@ -1619,6 +1619,8 @@ class KFX_EPUB_Properties(object):
             classes[class_name] = style
             style_class_names[style_str] = class_name
 
+        self.prune_redundant_class_styles(sorted_style_data, style_class_names)
+
         for book_part in self.book_parts:
             body = book_part.body()
             for e in body.iter("*"):
@@ -1657,6 +1659,62 @@ class KFX_EPUB_Properties(object):
         for mq_classes in self.media_queries.values():
             for class_style in mq_classes.values():
                 self.inventory_style(class_style)
+
+    def prune_redundant_class_styles(self, sorted_style_data, style_class_names):
+        """移除與電書協樣式表重複、或原版 EPUB 沒有的宣告。"""
+        text_only_in_links = {}
+        only_in_headings = {}
+        for book_part in self.book_parts:
+            for e in book_part.body().iter("*"):
+                style_str = e.get("style", "")
+                if style_str not in style_class_names:
+                    continue
+
+                in_links = self.text_only_inside_links(e)
+                text_only_in_links[style_str] = text_only_in_links.get(style_str, True) and in_links
+
+                is_heading = str(e.tag).rsplit("}", 1)[-1] in ("h1", "h2", "h3", "h4", "h5", "h6")
+                only_in_headings[style_str] = only_in_headings.get(style_str, True) and is_heading
+
+        for style_str, style, class_name in sorted_style_data:
+            # page-break-inside 仍用於圖片外框的辨識（normalize_fit_image_wrappers），只在標題上省略。
+            if only_in_headings.get(style_str):
+                style.pop("page-break-inside", None)
+
+            if not text_only_in_links.get(style_str):
+                continue
+
+            # style-standard.css 的 a:link 已是 #0000ff。
+            if style.get("color") in ("blue", "#0000ff"):
+                style.pop("color", None)
+            # .vrtl a / .hltr a 已提供方向正確的 overline / underline。
+            if style.get("text-decoration") == "overline":
+                style.pop("text-decoration", None)
+
+    @staticmethod
+    def text_only_inside_links(elem):
+        """判斷元素的可見文字是否全部位於 <a> 之內。"""
+        has_text = [False]
+
+        def walk(node, in_link):
+            if node.text and node.text.strip():
+                has_text[0] = True
+                if not in_link:
+                    return False
+
+            for child in node:
+                child_is_link = str(child.tag) in ("a", "{http://www.w3.org/1999/xhtml}a")
+                if not walk(child, in_link or child_is_link):
+                    return False
+                if child.tail and child.tail.strip():
+                    has_text[0] = True
+                    if not in_link:
+                        return False
+
+            return True
+
+        is_link = str(elem.tag) in ("a", "{http://www.w3.org/1999/xhtml}a")
+        return walk(elem, is_link) and has_text[0]
 
     def update_vertical_rl_class_usage(self):
         vertical_rl_classes = set()
