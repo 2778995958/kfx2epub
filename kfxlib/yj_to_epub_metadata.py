@@ -198,11 +198,12 @@ class KFX_EPUB_Metadata(object):
             if not self.asin:
                 self.asin = value
         elif cat_key == "kindle_title_metadata/author":
+            # 依 KFX 原始順序保留：第一位是主要作者，後續為插畫等協力者。
             if value:
-                self.authors.insert(0, value)
+                self.authors.append(value)
         elif cat_key == "kindle_title_metadata/author_pronunciation":
             if value:
-                self.author_pronunciations.insert(0, value)
+                self.author_pronunciations.append(value)
         elif cat_key == "author":
             if not self.authors:
                 self.authors = [a.strip() for a in value.split("&") if a]
