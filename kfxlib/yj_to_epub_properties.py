@@ -68,6 +68,29 @@ DEFAULT_KC_COMIC_FONT_SIZE = "16px"
 
 DEFAULT_CLASS_NAME_PREFIX = "class"
 
+# 電書協樣式表中實際存在的 utility class（字級百分比、寬高尺寸）。
+UTILITY_FONT_PERCENTS = {
+    "050", "060", "070", "075", "080", "085", "090", "100", "110", "115", "120",
+    "130", "140", "150", "160", "170", "180", "190", "200", "250", "300",
+    }
+
+UTILITY_FONT_EM_SIZES = {
+    "0em50", "0em60", "0em70", "0em75", "0em80", "0em85", "0em90", "1em", "1em10",
+    "1em15", "1em20", "1em30", "1em40", "1em50", "1em60", "1em70", "1em80", "1em90",
+    "2em", "2em50", "3em",
+    }
+
+UTILITY_BOX_PERCENTS = {
+    "010", "020", "025", "030", "033", "040", "050", "060", "067", "070", "075",
+    "080", "090", "100",
+    }
+
+UTILITY_BOX_EM_SIZES = {
+    "0em25", "0em50", "0em75", "1em", "1em25", "1em50", "1em75", "2em", "2em50",
+    "3em", "4em", "5em", "5em25", "6em", "7em", "8em", "8em75", "9em", "10em",
+    "11em", "12em", "13em", "14em", "15em", "20em", "30em", "40em",
+    }
+
 ALPHA_MASK = 0xff000000
 
 
@@ -1111,6 +1134,7 @@ style_cache = {}
 class KFX_EPUB_Properties(object):
     def __init__(self):
         self.css_rules = {}
+        self.extra_css_rules = {}
         self.missing_special_classes = set()
         self.media_queries = collections.defaultdict(dict)
         self.present_font_names = set()
@@ -1444,6 +1468,8 @@ class KFX_EPUB_Properties(object):
         self.css_rules = {}
 
         self.non_heritable_default_properties = self.Style(NON_HERITABLE_DEFAULT_PROPERTIES)
+        # 轉成電書協 utility class 時，若該 class 不存在於樣式表（例如 95% 字級），補在 style-kfx.css。
+        self.extra_css_rules = {}
 
         for book_part in self.book_parts:
             self.last_kfx_heading_level = "1"
@@ -1621,6 +1647,10 @@ class KFX_EPUB_Properties(object):
 
         self.prune_redundant_class_styles(sorted_style_data, style_class_names)
 
+        # 記錄轉換前的樣式，供 fixed-layout 頁面直接內嵌（那些頁面不套用樣式表）。
+        original_styles = {name: self.Style(dict(style.items())) for name, style in classes.items()}
+        class_utilities = self.map_class_styles_to_utility(classes)
+
         for book_part in self.book_parts:
             body = book_part.body()
             for e in body.iter("*"):
@@ -1632,9 +1662,14 @@ class KFX_EPUB_Properties(object):
                     if ((KEEP_STYLES_INLINE or book_part.is_fxl) and
                             class_name not in selector_classes and
                             "-kfx-media-query" not in class_style):
-                        e.set("style", class_style.tostring())
+                        e.set("style", original_styles[class_name].tostring())
                         self.inventory_style(class_style)
-                    elif len(class_style) == 0 and class_name not in selector_classes:
+                        continue
+
+                    for utility_class in class_utilities.get(class_name, []):
+                        self.add_class(e, utility_class)
+
+                    if len(class_style) == 0 and class_name not in selector_classes:
                         e.attrib.pop("style", None)
                     else:
                         self.add_class(e, class_name, before=True)
@@ -1659,6 +1694,123 @@ class KFX_EPUB_Properties(object):
         for mq_classes in self.media_queries.values():
             for class_style in mq_classes.values():
                 self.inventory_style(class_style)
+
+    def map_class_styles_to_utility(self, classes):
+        """把可以完整表達的宣告換成電書協 utility class，剩下的宣告留在原規則。"""
+        class_utilities = {}
+        for class_name, style in classes.items():
+            utilities = []
+            for name in list(style.keys()):
+                mapping = self.map_utility_property(name, style.get(name))
+                if mapping is None:
+                    continue
+                utility_class, extra_declaration = mapping
+                utilities.append(utility_class)
+                style.pop(name, None)
+                selector = class_selector(utility_class)
+                if extra_declaration is not None and selector not in self.extra_css_rules:
+                    self.extra_css_rules[selector] = extra_declaration
+
+            if utilities:
+                class_utilities[class_name] = utilities
+
+        return class_utilities
+
+    def map_utility_property(self, name, value):
+        """回傳 (utility class, 需補的宣告或 None)；無法對應時回傳 None。"""
+        value = (value or "").lower()
+
+        if name == "text-align":
+            utility_class = {"right": "align-end", "left": "align-left",
+                             "center": "align-center", "justify": "align-justify"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "font-weight":
+            utility_class = {"bold": "bold", "normal": "font-weight-normal"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "font-family":
+            if "sans-serif" in value:
+                return "gfont", None
+            if "serif" in value:
+                return "mfont", None
+            return None
+
+        if name == "font-size":
+            return self.map_font_size(value)
+
+        if name in ("height", "width", "max-height", "max-width"):
+            return self.map_box_size(name, value)
+
+        if name == "word-break":
+            utility_class = {"break-all": "word-break-break-all", "keep-all": "word-break-keep-all",
+                             "normal": "word-break-normal"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "line-break":
+            return ("line-break-" + value, None) if value in ("auto", "loose", "normal", "strict") else None
+
+        if name == "text-orientation":
+            return (value, None) if value in ("sideways", "upright") else None
+
+        if name == "text-emphasis-style":
+            utility_class = {"filled sesame": "em-sesame", "open sesame": "em-sesame-open"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        # text-combine-upright 保留給 normalize_tcy_spans 判斷（會改寫成 tcy class）。
+        return None
+
+    def map_font_size(self, value):
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)(rem|%|em)", value)
+        if not match:
+            return None
+        magnitude = float(match.group(1))
+
+        if match.group(2) == "em":
+            em_name = self.em_size_name(magnitude)
+            if em_name not in UTILITY_FONT_EM_SIZES:
+                return None
+            return "font-" + em_name, None
+
+        # 根字級 16px、body 100%：rem 與百分比等價（已確認沒有巢狀字級）。
+        percent = round(magnitude * 100 if match.group(2) == "rem" else magnitude, 4)
+        if percent != int(percent):
+            return None
+        digits = "%03d" % int(percent)
+        class_name = "font-%sper" % digits
+        extra = None if digits in UTILITY_FONT_PERCENTS else "font-size: %d%%" % int(percent)
+        return class_name, extra
+
+    def map_box_size(self, name, value):
+        if value == "auto" and name in ("height", "width"):
+            return name + "-auto", None
+        if value == "none" and name in ("max-height", "max-width"):
+            return name + "-none", None
+
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)(em|%)", value)
+        if not match:
+            return None
+        magnitude = float(match.group(1))
+
+        if match.group(2) == "%":
+            magnitude = round(magnitude, 4)
+            if magnitude != int(magnitude):
+                return None
+            digits = "%03d" % int(magnitude)
+            class_name = "%s-%sper" % (name, digits)
+            extra = None if digits in UTILITY_BOX_PERCENTS else "%s: %d%%" % (name, int(magnitude))
+            return class_name, extra
+
+        em_name = self.em_size_name(magnitude)
+        if em_name not in UTILITY_BOX_EM_SIZES:
+            return None
+        return "%s-%s" % (name, em_name), None
+
+    @staticmethod
+    def em_size_name(magnitude):
+        if magnitude == int(magnitude):
+            return "%dem" % int(magnitude)
+        return ("%.2f" % magnitude).replace(".", "em")
 
     def prune_redundant_class_styles(self, sorted_style_data, style_class_names):
         """移除與電書協樣式表重複、或原版 EPUB 沒有的宣告。"""
@@ -2692,8 +2844,9 @@ class KFX_EPUB_Properties(object):
         style = self.Style({})
         for class_name in elem.get("class", "").split():
             class_style = self.css_rules.get(class_selector(class_name))
+            # style-kfx.css 以外（電書協 utility class）的樣式不在 css_rules 中，忽略即可。
             if class_style is None:
-                return None
+                continue
             style.update(class_style, replace=True)
 
         return style
@@ -2713,7 +2866,9 @@ class KFX_EPUB_Properties(object):
                         all(name in {"text-combine-upright", "word-break", "-webkit-word-break", "-epub-word-break"}
                             for name in class_style.keys())):
                     # word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
-                    span.set("class", "tcy")
+                    # 電書協 utility class（不在 css_rules 中）要保留，例如字級。
+                    kept = [c for c in classes if class_selector(c) not in self.css_rules]
+                    span.set("class", " ".join(kept + ["tcy"]))
                 elif "tcy" not in classes:
                     # 保留原本的樣式 class，再補上 tcy；consolidate 會據此避免合併。
                     span.set("class", " ".join(classes + ["tcy"]))
@@ -2788,6 +2943,10 @@ class KFX_EPUB_Properties(object):
 
     def kfx_style_css_data(self):
         css_lines = ["@charset \"UTF-8\";"]
+
+        if self.extra_css_rules:
+            css_lines.extend(["%s {%s}" % (selector, self.extra_css_rules[selector])
+                              for selector in sorted(self.extra_css_rules)])
 
         if self.font_faces:
             css_lines.extend(["@font-face {%s}" % ff.tostring() for ff in sorted(self.font_faces)])
