@@ -5,6 +5,7 @@ from lxml import etree
 import os
 import pkgutil
 import re
+import unicodedata
 import zipfile
 
 from .epub_output import (EPUB_NS_URI, EPUB_TYPE, IDX_ENTRY, MATH, qname, split_value, SVG, XML_LANG, XML_NS_URI, value_str)
@@ -67,6 +68,56 @@ DEFAULT_DOCUMENT_FONT_SIZE = "1em"
 DEFAULT_KC_COMIC_FONT_SIZE = "16px"
 
 DEFAULT_CLASS_NAME_PREFIX = "class"
+
+HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+INLINE_TAGS = {"span", "a", "b", "i", "em", "strong", "sub", "sup", "code",
+               "ruby", "rt", "rp", "br", "img"}
+
+
+class StyleUsage(object):
+    """記錄樣式被哪些元素使用，供「可省略宣告」與方向相關 class 判斷。"""
+    __slots__ = ("tags", "all_headings", "all_links", "all_hr", "all_body_no_text",
+                 "body_only", "direction", "has_direction", "font_px")
+
+    def __init__(self):
+        self.tags = set()
+        self.all_headings = True
+        self.all_links = True
+        self.all_hr = True
+        self.all_body_no_text = True
+        self.body_only = True
+        self.direction = None
+        self.has_direction = False
+        self.font_px = 16.0
+
+
+_utility_class_names = None
+
+
+def utility_class_names():
+    global _utility_class_names
+    if _utility_class_names is None:
+        names = set()
+        for filename in ("style-standard.css", "style-advance.css"):
+            path = os.path.join(BUNDLED_STYLES_DIR, filename)
+            css = re.sub(r"/\*.*?\*/", "", open(path, encoding="utf-8").read(), flags=re.S)
+            names.update(re.findall(r"\.([A-Za-z][\w-]*)", css))
+        _utility_class_names = names
+    return _utility_class_names
+
+
+def box_size_name(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(em|%)", value or "")
+    if not match:
+        return None
+    magnitude = float(match.group(1))
+    if match.group(2) == "%":
+        if magnitude != int(magnitude):
+            return None
+        return "%03dper" % int(magnitude)
+    if magnitude == int(magnitude):
+        return "%dem" % int(magnitude)
+    return ("%.2f" % magnitude).replace(".", "em")
 
 # 電書協樣式表中實際存在的 utility class（字級百分比、寬高尺寸）。
 UTILITY_FONT_PERCENTS = {
@@ -1645,11 +1696,12 @@ class KFX_EPUB_Properties(object):
             classes[class_name] = style
             style_class_names[style_str] = class_name
 
-        self.prune_redundant_class_styles(sorted_style_data, style_class_names)
+        style_usage = self.collect_style_usage(style_class_names)
+        self.prune_redundant_class_styles(sorted_style_data, style_class_names, style_usage)
 
         # 記錄轉換前的樣式，供 fixed-layout 頁面直接內嵌（那些頁面不套用樣式表）。
         original_styles = {name: self.Style(dict(style.items())) for name, style in classes.items()}
-        class_utilities = self.map_class_styles_to_utility(classes)
+        class_utilities = self.map_class_styles_to_utility(classes, style_usage)
 
         for book_part in self.book_parts:
             body = book_part.body()
@@ -1695,13 +1747,94 @@ class KFX_EPUB_Properties(object):
             for class_style in mq_classes.values():
                 self.inventory_style(class_style)
 
-    def map_class_styles_to_utility(self, classes):
+    def collect_style_usage(self, style_class_names):
+        usage = {}
+        for book_part in self.book_parts:
+            direction = None
+            if not (book_part.is_fxl or book_part.is_nav or not book_part.writing_mode_value):
+                direction = "vrtl" if book_part.writing_mode_value.startswith("vertical") else "hltr"
+
+            for e in book_part.body().iter("*"):
+                style_str = e.get("style", "")
+                if style_str not in style_class_names:
+                    continue
+                class_name = style_class_names[style_str]
+                info = usage.get(class_name)
+                if info is None:
+                    info = usage[class_name] = StyleUsage()
+
+                tag = str(e.tag).rsplit("}", 1)[-1]
+                info.tags.add(tag)
+                info.all_headings = info.all_headings and tag in HEADING_TAGS
+                info.all_links = info.all_links and self.text_only_inside_links(e)
+                info.all_hr = info.all_hr and tag == "hr"
+                info.body_only = info.body_only and tag == "body"
+                if tag == "body":
+                    inline_children = any(str(c.tag).rsplit("}", 1)[-1] in INLINE_TAGS for c in e)
+                    info.all_body_no_text = (info.all_body_no_text and
+                                             not (e.text or "").strip() and
+                                             not inline_children and len(e) > 0)
+
+                if direction:
+                    if not info.has_direction:
+                        info.has_direction = True
+                        info.direction = direction
+                    elif info.direction != direction:
+                        info.direction = None
+
+                font_px = self.style_font_px(self.get_style(e))
+                if font_px is not None:
+                    info.font_px = font_px
+
+        return usage
+
+    @staticmethod
+    def style_font_px(style):
+        value = style.get("font-size")
+        if not value:
+            return None
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)(rem|em|%|px)", value)
+        if not match:
+            return None
+        magnitude = float(match.group(1))
+        unit = match.group(2)
+        if unit in ("rem", "em"):
+            return magnitude * 16.0
+        if unit == "%":
+            return magnitude / 100.0 * 16.0
+        return magnitude
+
+    def map_class_styles_to_utility(self, classes, usage):
         """把可以完整表達的宣告換成電書協 utility class，剩下的宣告留在原規則。"""
         class_utilities = {}
         for class_name, style in classes.items():
+            info = usage.get(class_name) or StyleUsage()
+
+            # <hr>：電書協的 .hltr/.vrtl hr 特異度更高，會覆蓋樣式與邊距；
+            # 若寬度、顏色又與 hr 基本規則相同，整個樣式就是多餘的。
+            if info.all_hr and self.is_redundant_hr_style(style):
+                style.clear()
+                continue
+
+            # 標題上「一行高」的段前距（1rem）：bw 沒有這個宣告。
+            if (info.all_headings and info.font_px > 0 and
+                    self.is_one_rem_margin(style.get("margin-top"), info.font_px)):
+                style.pop("margin-top", None)
+
             utilities = []
+
+            hanging = self.try_map_hanging_indent(style, info.direction)
+            if hanging:
+                utilities.append(hanging)
+
+            # body 的 text-indent 只會被後方的 p/div reset 蓋掉（沒有直接文字時）。
+            if not hanging and info.body_only and info.all_body_no_text:
+                style.pop("text-indent", None)
+
+            utilities.extend(self.try_map_borders(style))
+
             for name in list(style.keys()):
-                mapping = self.map_utility_property(name, style.get(name))
+                mapping = self.map_utility_property(name, style.get(name), info.direction)
                 if mapping is None:
                     continue
                 utility_class, extra_declaration = mapping
@@ -1716,9 +1849,154 @@ class KFX_EPUB_Properties(object):
 
         return class_utilities
 
-    def map_utility_property(self, name, value):
+    @staticmethod
+    def is_one_rem_margin(value, font_px):
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)em", value or "")
+        if not match:
+            return False
+        return abs(float(match.group(1)) * font_px - 16.0) <= 0.5
+
+    @staticmethod
+    def is_redundant_hr_style(style):
+        has_border = False
+        for name, value in style.items():
+            if name.startswith("margin-"):
+                continue
+            if name == "border-width" or name.endswith("-width"):
+                if value != "1px":
+                    return False
+                continue
+            if name == "border-color" or name.endswith("-color"):
+                if value not in ("black", "#000000", "#000"):
+                    return False
+                continue
+            if name == "border-style" or name.endswith("-style"):
+                if value not in ("solid", "none"):
+                    return False
+                has_border = True
+                continue
+            return False
+        return has_border
+
+    # KFX 百分比邊距的版面基準寬度；由 10%↔4em、15%↔6em、2.5%↔1em 三組對照推得。
+    KFX_LAYOUT_WIDTH_EM = 40
+
+    @classmethod
+    def try_map_hanging_indent(cls, style, direction):
+        """padding-top/left 與負 text-indent 同值 → 電書協的 h-indent（方向相依）。
+        KFX 也可能用百分比表示同一件事：margin M% + text-indent -M/(1-M)%。"""
+        if not direction:
+            return None
+
+        percent_indent = re.fullmatch(r"-(\d+(?:\.\d+)?)%", style.get("text-indent") or "")
+        if percent_indent:
+            start_margin = "margin-top" if direction == "vrtl" else "margin-left"
+            margin = re.fullmatch(r"(\d+(?:\.\d+)?)%", style.get(start_margin) or "")
+            if not margin:
+                return None
+            margin_percent = float(margin.group(1))
+            indent_percent = float(percent_indent.group(1))
+            if margin_percent <= 0 or margin_percent >= 100:
+                return None
+            # 百分比 text-indent 是相對元素自己的內容寬度，因此要扣掉 margin 後的寬度。
+            if abs(indent_percent - margin_percent / (1 - margin_percent / 100.0)) > 0.01:
+                return None
+
+            em_magnitude = margin_percent * cls.KFX_LAYOUT_WIDTH_EM / 100.0
+            if abs(em_magnitude - round(em_magnitude)) > 1e-6:
+                return None
+            em_value = int(round(em_magnitude))
+            if not (1 <= em_value <= 10):
+                return None
+            name = "h-indent-%dem" % em_value
+            if name not in utility_class_names():
+                return None
+            style.pop(start_margin, None)
+            style.pop("text-indent", None)
+            return name
+
+        match = re.fullmatch(r"-(\d+(?:\.\d+)?)em", style.get("text-indent") or "")
+        if not match:
+            return None
+        magnitude = float(match.group(1))
+        pad_side = "padding-top" if direction == "vrtl" else "padding-left"
+        padding = re.fullmatch(r"(\d+(?:\.\d+)?)em", style.get(pad_side) or "")
+        if not padding or abs(float(padding.group(1)) - magnitude) > 1e-6:
+            return None
+        if magnitude != int(magnitude) or not (1 <= magnitude <= 10):
+            return None
+        name = "h-indent-%dem" % int(magnitude)
+        if name not in utility_class_names():
+            return None
+        style.pop("text-indent", None)
+        style.pop(pad_side, None)
+        return name
+
+    @staticmethod
+    def try_map_borders(style):
+        """框線：四邊 solid、單邊 solid、上下／左右 solid。"""
+        sides = ["top", "right", "bottom", "left"]
+        styles = {side: style.get("border-%s-style" % side) for side in sides}
+        width = style.get("border-width") or style.get("border-top-width")
+        color = style.get("border-color") or style.get("border-top-color")
+
+        shorthand = style.get("border-style")
+        if shorthand:
+            parts = shorthand.split()
+            if len(parts) == 1:
+                expanded = parts * 4
+            elif len(parts) == 2:
+                expanded = [parts[0], parts[1], parts[0], parts[1]]
+            elif len(parts) == 4:
+                expanded = parts
+            else:
+                return []
+            for i, side in enumerate(sides):
+                styles[side] = expanded[i]
+        elif any(v is None for v in styles.values()):
+            return []
+
+        if any(v not in ("solid", "none") for v in styles.values()):
+            return []
+        if width is not None and width != "1px":
+            return []
+        if color is not None and color not in ("black", "#000000", "#000"):
+            return []
+
+        solid = [side for side in sides if styles[side] == "solid"]
+        classes = []
+        if len(solid) == 4:
+            classes.append("k-solid")
+        elif solid == ["top", "bottom"]:
+            classes.append("k-solid-topbottom")
+        elif solid == ["left", "right"]:
+            classes.append("k-solid-rightleft")
+        elif len(solid) == 1:
+            classes.extend(["k-solid-" + solid[0], "k-1px"])
+        else:
+            return []
+
+        if len(solid) != 4:
+            if width == "1px" and "k-1px" not in classes:
+                classes.append("k-1px")
+            if color in ("black", "#000000", "#000"):
+                classes.append("k-black")
+
+        for side in sides:
+            style.pop("border-%s-style" % side, None)
+            style.pop("border-%s-width" % side, None)
+            style.pop("border-%s-color" % side, None)
+        for name in ("border-style", "border-width", "border-color",
+                     "border-top-width", "border-top-color"):
+            style.pop(name, None)
+        return list(dict.fromkeys(classes))
+
+    def map_utility_property(self, name, value, direction=None):
         """回傳 (utility class, 需補的宣告或 None)；無法對應時回傳 None。"""
         value = (value or "").lower()
+
+        if name.startswith(("margin", "padding")):
+            return self.map_logical_box(name, value, direction)
 
         if name == "text-align":
             utility_class = {"right": "align-end", "left": "align-left",
@@ -1758,6 +2036,43 @@ class KFX_EPUB_Properties(object):
             return (utility_class, None) if utility_class else None
 
         # text-combine-upright 保留給 normalize_tcy_spans 判斷（會改寫成 tcy class）。
+        return None
+
+    @staticmethod
+    def map_logical_box(name, value, direction):
+        """邊距／內距：依頁面方向換成邏輯 class（m-start / p-after …）；行首字下げ用 start-*。"""
+        if not direction:
+            return None
+
+        if name in ("margin", "padding"):
+            size = box_size_name(value)
+            if not size:
+                return None
+            shorthand = ("m-" if name == "margin" else "p-") + size
+            return (shorthand, None) if shorthand in utility_class_names() else None
+
+        side = name.rsplit("-", 1)[-1]
+        if side not in ("top", "bottom", "left", "right"):
+            return None
+        if direction == "vrtl":
+            logical = {"top": "start", "bottom": "end", "left": "after", "right": "before"}[side]
+        else:
+            logical = {"top": "before", "bottom": "after", "left": "start", "right": "end"}[side]
+
+        is_margin = name.startswith("margin")
+        size = box_size_name(value)
+        if not size:
+            return None
+
+        candidates = []
+        if is_margin and logical == "start" and size.endswith("em"):
+            candidates.append("start-" + size)
+        candidates.append(("%s-%s-%s" % ("m" if is_margin else "p", logical, size)))
+
+        names = utility_class_names()
+        for candidate in candidates:
+            if candidate in names:
+                return candidate, None
         return None
 
     def map_font_size(self, value):
@@ -1812,28 +2127,18 @@ class KFX_EPUB_Properties(object):
             return "%dem" % int(magnitude)
         return ("%.2f" % magnitude).replace(".", "em")
 
-    def prune_redundant_class_styles(self, sorted_style_data, style_class_names):
+    def prune_redundant_class_styles(self, sorted_style_data, style_class_names, usage):
         """移除與電書協樣式表重複、或原版 EPUB 沒有的宣告。"""
-        text_only_in_links = {}
-        only_in_headings = {}
-        for book_part in self.book_parts:
-            for e in book_part.body().iter("*"):
-                style_str = e.get("style", "")
-                if style_str not in style_class_names:
-                    continue
-
-                in_links = self.text_only_inside_links(e)
-                text_only_in_links[style_str] = text_only_in_links.get(style_str, True) and in_links
-
-                is_heading = str(e.tag).rsplit("}", 1)[-1] in ("h1", "h2", "h3", "h4", "h5", "h6")
-                only_in_headings[style_str] = only_in_headings.get(style_str, True) and is_heading
-
         for style_str, style, class_name in sorted_style_data:
+            info = usage.get(style_class_names.get(style_str))
+            if info is None:
+                continue
+
             # page-break-inside 仍用於圖片外框的辨識（normalize_fit_image_wrappers），只在標題上省略。
-            if only_in_headings.get(style_str):
+            if info.all_headings:
                 style.pop("page-break-inside", None)
 
-            if not text_only_in_links.get(style_str):
+            if not info.all_links:
                 continue
 
             # style-standard.css 的 a:link 已是 #0000ff。
@@ -1988,7 +2293,9 @@ class KFX_EPUB_Properties(object):
 
         sty.pop("-kfx-render", None)
 
-        if (book_part.is_fxl and elem.tag in {"a", "span"} and sty.get("display", "inline") == "inline" and
+        # 電書協的中央寄せ樣式（span + div）靠 inline 元素上的 width/height 生效，
+        # 因此可重排頁也要補上 display:inline-block（不限 fixed-layout）。
+        if (elem.tag in {"a", "span"} and sty.get("display", "inline") == "inline" and
                 ("height" in sty or "width" in sty)):
             sty["display"] = "inline-block"
 
@@ -2961,12 +3268,107 @@ class KFX_EPUB_Properties(object):
 
         return "\n".join(css_lines).encode("utf-8")
 
+    def has_kfx_css_rules(self):
+        """style-kfx.css 只有在真的產生規則時才輸出並 @import。"""
+        return bool(self.css_rules or self.media_queries or self.font_faces or self.extra_css_rules)
+
+    def uses_publisher_css(self):
+        """出版社樣式表只在角川系的書插入（bw 的 3 本角川書都有 style-kadokawa.css / style-karc.css）。"""
+        publisher = unicodedata.normalize("NFKC", self.publisher or "").lower()
+        return "kadokawa" in publisher or "角川" in publisher
+
+    @staticmethod
+    def book_style_css_data(include_publisher_css, has_kfx_css):
+        text = read_bundled_style("book-style.css").decode("utf-8")
+        text = re.sub(r"^@import\s+\"style-kfx\.css\";\r?\n", "", text, flags=re.M)
+
+        imports = ""
+        if include_publisher_css:
+            imports += '@import "style-karc.css";\r\n'
+            imports += '@import "style-kadokawa.css";\r\n'
+        if has_kfx_css:
+            imports += '@import "style-kfx.css";\r\n'
+
+        if imports:
+            text = re.sub(r'^(@import\s+"style-advance\.css";\r?\n)', r"\1" + imports, text, flags=re.M)
+
+        return text.encode("utf-8")
+
     def refresh_book_style_css(self):
         if self.KFX_CSS_FILEPATH not in self.oebps_files:
             return
 
         self.prune_unused_css_rules()
         self.add_oebps_file(self.KFX_CSS_FILEPATH, self.kfx_style_css_data(), "text/css")
+
+    def apply_page_type_classes(self):
+        """在產生 CSS 之前補上頁型 class，讓出版社 CSS 能命中，並移除重複的 body 邊距。"""
+        publisher_css = self.uses_publisher_css()
+        colophon = next((bp for bp in self.book_parts if bp.filename == self.COLOPHON_FILEPATH), None)
+        colophon_spacing = (self.find_body_spacing_class(colophon.body()) if colophon is not None else None)
+
+        for book_part in self.book_parts:
+            if book_part.is_nav:
+                continue
+
+            body = book_part.body()
+            if (book_part.is_fxl or self.should_use_fixed_layout_svg(book_part, body) or
+                    self.is_image_only_body(body)):
+                continue
+
+            if book_part.filename == self.TOC_FILEPATH:
+                page_class = "p-toc"
+            elif book_part.filename == self.COLOPHON_FILEPATH:
+                page_class = "p-colophon"
+            else:
+                page_class = "p-text"
+
+            if publisher_css and page_class != "p-toc":
+                spacing_class = self.find_body_spacing_class(body)
+                if spacing_class is not None:
+                    if page_class == "p-colophon":
+                        self.remove_class(body, spacing_class)
+                    elif self.has_center_text_align(body):
+                        page_class = "p-titlepage"
+                        self.remove_class(body, spacing_class)
+                    elif spacing_class == colophon_spacing:
+                        page_class = "p-colophon2"
+                        self.remove_class(body, spacing_class)
+
+            self.add_class(body, page_class)
+
+    # body 上的樣式若只有 margin-left/right + padding-top/bottom 且左右為百分比，
+    # 代表它是 KFX 模擬 .p-colophon .main 等頁面內距的樣式。
+    @staticmethod
+    def is_body_spacing_style(style):
+        if not style:
+            return False
+        if any(name not in ("margin-left", "margin-right", "padding-top", "padding-bottom")
+               for name in style.keys()):
+            return False
+        return (style.get("margin-left", "").endswith("%") or
+                style.get("margin-right", "").endswith("%"))
+
+    def find_body_spacing_class(self, body):
+        for class_name in body.get("class", "").split():
+            style = self.css_rules.get(class_selector(class_name))
+            if style is not None and self.is_body_spacing_style(style):
+                return class_name
+        return None
+
+    @staticmethod
+    def has_center_text_align(body):
+        if "align-center" in body.get("class", "").split():
+            return True
+        return bool(re.search(r"(^|;)\s*text-align\s*:\s*center", body.get("style", "") or ""))
+
+    @staticmethod
+    def remove_class(elem, class_name):
+        classes = [name for name in elem.get("class", "").split() if name != class_name]
+        if classes:
+            elem.set("class", " ".join(classes))
+        else:
+            elem.attrib.pop("class", None)
 
     def create_css_files(self):
         self.prune_unused_css_rules()
@@ -2991,10 +3393,22 @@ class KFX_EPUB_Properties(object):
                     self.ADVANCE_CSS_FILEPATH, data=read_bundled_style("style-advance.css"), mimetype="text/css")
                 self.manifest_resource(
                     self.CHECK_CSS_FILEPATH, data=read_bundled_style("style-check.css"), mimetype="text/css")
+
+                include_publisher_css = self.uses_publisher_css()
+                has_kfx_css = self.has_kfx_css_rules()
                 self.manifest_resource(
-                    self.STYLES_CSS_FILEPATH, data=read_bundled_style("book-style.css"), mimetype="text/css")
-                self.manifest_resource(
-                    self.KFX_CSS_FILEPATH, data=self.kfx_style_css_data(), mimetype="text/css")
+                    self.STYLES_CSS_FILEPATH,
+                    data=self.book_style_css_data(include_publisher_css, has_kfx_css), mimetype="text/css")
+
+                if include_publisher_css:
+                    self.manifest_resource(
+                        self.KARC_CSS_FILEPATH, data=read_bundled_style("style-karc.css"), mimetype="text/css")
+                    self.manifest_resource(
+                        self.KADOKAWA_CSS_FILEPATH, data=read_bundled_style("style-kadokawa.css"), mimetype="text/css")
+
+                if has_kfx_css:
+                    self.manifest_resource(
+                        self.KFX_CSS_FILEPATH, data=self.kfx_style_css_data(), mimetype="text/css")
 
     def ensure_linked_css_files(self):
         # 整頁圖片頁的 fixed-layout-jp.css 是在 save_book_parts 期間才掛上，

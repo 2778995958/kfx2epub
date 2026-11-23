@@ -106,7 +106,6 @@ class KFX_EPUB(
         self.fixup_styles_and_classes()
         self.normalize_tcy_spans()
         self.normalize_fit_image_wrappers()
-        self.create_css_files()
         self.prepare_book_parts()
         self.report_missing_positions()
 

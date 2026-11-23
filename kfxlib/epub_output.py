@@ -266,6 +266,8 @@ class EPUB_Output(object):
     STANDARD_CSS_FILEPATH = "/style-standard.css"
     ADVANCE_CSS_FILEPATH = "/style-advance.css"
     CHECK_CSS_FILEPATH = "/style-check.css"
+    KADOKAWA_CSS_FILEPATH = "/style-kadokawa.css"
+    KARC_CSS_FILEPATH = "/style-karc.css"
     FIXED_LAYOUT_CSS_FILEPATH = "/fixed-layout-jp.css"
     LAYOUT_CSS_FILEPATH = "/layout%04d.css"
 
@@ -286,6 +288,8 @@ class EPUB_Output(object):
         STANDARD_CSS_FILEPATH = "/style" + STANDARD_CSS_FILEPATH
         ADVANCE_CSS_FILEPATH = "/style" + ADVANCE_CSS_FILEPATH
         CHECK_CSS_FILEPATH = "/style" + CHECK_CSS_FILEPATH
+        KADOKAWA_CSS_FILEPATH = "/style" + KADOKAWA_CSS_FILEPATH
+        KARC_CSS_FILEPATH = "/style" + KARC_CSS_FILEPATH
         FIXED_LAYOUT_CSS_FILEPATH = "/style" + FIXED_LAYOUT_CSS_FILEPATH
         LAYOUT_CSS_FILEPATH = "/style" + LAYOUT_CSS_FILEPATH
 
@@ -511,10 +515,13 @@ class EPUB_Output(object):
             self.rename_colophon_book_part()
             self.rename_spine_book_parts()
 
+        self.apply_page_type_classes()
+
         if self.fixed_layout and (self.original_height is None or self.original_width is None) and (self.is_comic or self.is_children):
             self.compare_fixed_layout_viewports()
 
         self.save_book_parts()
+        self.create_css_files()
         self.ensure_linked_css_files()
 
         if self.ncx_location is None and (self.generate_epub2 or self.GENERATE_EPUB2_COMPATIBLE):
