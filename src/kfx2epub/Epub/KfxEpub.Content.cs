@@ -9,6 +9,9 @@ public partial class KfxEpub
     public List<string> ContextStack { get; } = new();
     public HashSet<string> ReportedCharacters { get; } = new();
 
+    // 版面內容中的區塊圖片容器（$270 + 區塊圖片版面），供整頁圖片判定使用。
+    private readonly HashSet<XNode> _blockImageContainers = new();
+
     public static readonly Dictionary<string, string> ListStyleTypes = new()
     {
         ["$346"] = "ol", ["$347"] = "ol", ["$342"] = "ul", ["$340"] = "ul", ["$271"] = "ul",
@@ -234,6 +237,7 @@ public partial class KfxEpub
         PushContext($"{contentType} {locationId}");
         var contentElem = new XNode("unknown");
         var discard = false;
+        var pageImageCandidate = false;
         var isTopLevel = parent.IsLocal("html") || parent.IsNs(XmlNamespaces.XHtml, "html");
 
         var kfxStyleName = content.Pop("$157").ToStr();
@@ -312,7 +316,11 @@ public partial class KfxEpub
 
             AddContent(content, contentElem, bookPart, writingMode, layout, fixedHeight, fixedWidth, childImageRole);
 
-            if (layout == (writingMode != "vertical-rl" ? "$323" : "$322"))
+            // KFX 的區塊圖片容器若只包一張圖，代表「整頁一張圖」。
+            var blockImageLayout = writingMode != "vertical-rl" ? "$323" : "$322";
+            pageImageCandidate = layout == blockImageLayout;
+
+            if (layout == blockImageLayout)
             {
                 // 一般區塊圖片：留給後續 SVG wrapper 處理。
             }
@@ -808,6 +816,17 @@ public partial class KfxEpub
         FixVerticalAlignProperties(contentElem, contentStyle);
         SetStyle(contentElem, contentStyle);
 
+        // 記錄「只包一張圖」的區塊圖片容器，並判斷這一頁是否只有這個容器。
+        if (pageImageCandidate && IsSingleImageContainer(contentElem))
+        {
+            _blockImageContainers.Add(contentElem);
+        }
+
+        if (isTopLevel && IsPageImageRoot(contentElem))
+        {
+            bookPart.IsPageImage = true;
+        }
+
         if (!discard)
         {
             if (isTopLevel)
@@ -1128,6 +1147,38 @@ public partial class KfxEpub
     {
         XhtmlUtil.SubElement(bookPart.Head(), "meta").Set("name", "viewport")
             .Set("content", $"width={width}, height={height}");
+    }
+
+    // 「整頁只有一張圖片」：頁面根節點本身就是區塊圖片容器，
+    // 或根容器內只有一個區塊圖片容器，且沒有文字。
+    private bool IsPageImageRoot(XNode elem)
+    {
+        if (_blockImageContainers.Contains(elem))
+        {
+            return string.IsNullOrEmpty(elem.Text);
+        }
+
+        if (!string.IsNullOrEmpty(elem.Text) || elem.Children.Count != 1) return false;
+        var child = elem.Children[0];
+        return child.IsLocal("div") && _blockImageContainers.Contains(child) && string.IsNullOrEmpty(child.Tail);
+    }
+
+    // 區塊圖片容器內只有一張圖（圖片本身可能先被包在一個 div 內），沒有文字。
+    private static bool IsSingleImageContainer(XNode elem)
+    {
+        if (!string.IsNullOrEmpty(elem.Text) || elem.Children.Count != 1) return false;
+        var child = elem.Children[0];
+        if (!string.IsNullOrEmpty(child.Tail)) return false;
+
+        if (child.IsLocal("img")) return child.Children.Count == 0;
+
+        if (child.IsLocal("div") && string.IsNullOrEmpty(child.Text) && child.Children.Count == 1)
+        {
+            var img = child.Children[0];
+            return img.IsLocal("img") && img.Children.Count == 0;
+        }
+
+        return false;
     }
 
     public int GetPxValue(IonStruct content, string propName)

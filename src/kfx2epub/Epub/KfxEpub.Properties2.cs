@@ -947,14 +947,15 @@ public partial class KfxEpub
     {
         foreach (var bookPart in BookParts)
         {
-            if (bookPart.IsCoverPage) continue;
             var body = bookPart.Body();
             var style = GetStyle(body);
+            // 封面頁也要記錄書寫方向，輸出 <html class="vrtl|hltr"> 時才有依據。
+            bookPart.WritingModeValue = style.Get("writing-mode", WritingMode) ?? WritingMode;
+            if (bookPart.IsCoverPage) continue;
             if (!style.ContainsKey("font-family") && !string.IsNullOrEmpty(DefaultFontFamily)) style.Set("font-family", DefaultFontFamily);
             if (!style.ContainsKey("font-size")) style.Set("font-size", DefaultFontSize);
             if (!style.ContainsKey("line-height")) style.Set("line-height", DefaultLineHeight);
             if (!style.ContainsKey("writing-mode")) style.Set("writing-mode", WritingMode);
-            bookPart.WritingModeValue = style.Get("writing-mode");
             SetStyle(body, style);
             if (!string.IsNullOrEmpty(Language)) bookPart.Html.SetNs(XmlNamespaces.Xml, "lang", Language);
         }

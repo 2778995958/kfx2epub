@@ -58,6 +58,10 @@ public sealed class BookPart : OpfProperties
     public string WritingModeValue { get; set; }
     public bool HasVerticalRlClass { get; set; }
 
+    // KFX 這一頁的唯一內容是一個區塊圖片容器（$270 + 區塊圖片版面），
+    // 語意上就是「整頁一張圖」，輸出時改用 fixed-layout SVG 頁面。
+    public bool IsPageImage { get; set; }
+
     public BookPart(string filename, int partIndex, XNode html, IEnumerable<string> opfProperties = null,
         bool? linear = null, bool omit = false, string idref = null) : base(opfProperties)
     {
@@ -397,6 +401,7 @@ public partial class KfxEpub
         }
 
         SaveBookParts();
+        EnsureLinkedCssFiles();
         CreateOpf();
         return ZipEpub();
     }
@@ -730,6 +735,25 @@ public partial class KfxEpub
         newLink.Set("href", href);
     }
 
+    // 部分樣式檔（例如整頁圖片頁的 fixed-layout-jp.css）是在 SaveBookParts 期間才掛上；
+    // CreateCssFiles 已於建構子執行完畢，這裡補登記到 manifest。
+    public void EnsureLinkedCssFiles()
+    {
+        foreach (var bookPart in BookParts)
+        {
+            foreach (var link in bookPart.Head().Elements("link"))
+            {
+                if (link.Get("rel") != "stylesheet" || !link.Has("href")) continue;
+                var cssFile = PathUtil.GetUrlFilename(PathUtil.UrlAbsolutePath(link.Get("href"), bookPart.Filename));
+                if (cssFile == FixedLayoutCssFilepath && !ManifestFiles.ContainsKey(FixedLayoutCssFilepath))
+                {
+                    ManifestResource(FixedLayoutCssFilepath, data: ReadBundledStyle("fixed-layout-jp.css"),
+                        mimetype: "text/css");
+                }
+            }
+        }
+    }
+
     public void IdentifyCover()
     {
         if (BookParts.Count == 0) return;
@@ -913,21 +937,35 @@ public partial class KfxEpub
         {
             ConvertToFixedLayoutSvgPage(bookPart, head, body);
         }
-        else
+        else if (ShouldUseFixedLayoutSvg(bookPart, body))
         {
-            var imageOnly = IsImageOnlyBody(body);
-            if (imageOnly)
+            if (ConvertToFixedLayoutSvgPage(bookPart, head, body))
+            {
+                bookPart.IsFxl = true;
+            }
+            else if (IsImageOnlyBody(body))
             {
                 ConvertToFitImagePage(bookPart);
             }
             else
             {
-                EnsureMainWrapper(body);
-                if (bookPart.Filename == TocFilepath && !body.Has("class")) body.Set("class", "p-toc");
-                else if (bookPart.Filename == ColophonFilepath && !body.Has("class")) body.Set("class", "p-colophon");
-                else if (!body.Has("class")) body.Set("class", "p-text");
-                if (bookPart.HasVerticalRlClass) existingClasses.Insert(0, "vrtl");
+                FinalizeReflowableBody(bookPart, body);
             }
+        }
+        else if (IsImageOnlyBody(body))
+        {
+            ConvertToFitImagePage(bookPart);
+        }
+        else
+        {
+            FinalizeReflowableBody(bookPart, body);
+        }
+
+        // 電書協樣式：可重排頁的 <html> 依「這一頁在 KFX 的書寫方向」加上 vrtl 或 hltr。
+        // fixed-layout 頁（含整頁圖片頁）遵循 FXL 樣板，不加方向 class。
+        if (!bookPart.IsNav && !bookPart.IsFxl && !string.IsNullOrEmpty(bookPart.WritingModeValue))
+        {
+            existingClasses.Insert(0, IsVerticalWritingMode(bookPart.WritingModeValue) ? "vrtl" : "hltr");
         }
 
         if (existingClasses.Count > 0) bookPart.Html.Set("class", string.Join(" ", existingClasses));
@@ -939,6 +977,21 @@ public partial class KfxEpub
             var bodyClass = body.Pop("class");
             body.Set("class", bodyClass);
         }
+    }
+
+    public bool ShouldUseFixedLayoutSvg(BookPart bookPart, XNode body)
+    {
+        if (bookPart.IsPageImage) return true;
+        // KFX 的封面頁本身看不出整本書圖片頁的排版方式，跟隨本書其他圖片頁的判定。
+        return bookPart.IsCoverPage && IsImageOnlyBody(body) && BookParts.Any(bp => bp.IsPageImage);
+    }
+
+    public void FinalizeReflowableBody(BookPart bookPart, XNode body)
+    {
+        EnsureMainWrapper(body);
+        if (bookPart.Filename == TocFilepath && !body.Has("class")) body.Set("class", "p-toc");
+        else if (bookPart.Filename == ColophonFilepath && !body.Has("class")) body.Set("class", "p-colophon");
+        else if (!body.Has("class")) body.Set("class", "p-text");
     }
 
     public string FormatXhtmlDocumentHeader(string html)
@@ -1018,17 +1071,17 @@ public partial class KfxEpub
         }
     }
 
-    public void ConvertToFixedLayoutSvgPage(BookPart bookPart, XNode head, XNode body)
+    public bool ConvertToFixedLayoutSvgPage(BookPart bookPart, XNode head, XNode body)
     {
         var (src, imageWidth, imageHeight) = ExtractSingleFixedLayoutImage(bookPart, body);
-        if (src is null) return;
+        if (src is null) return false;
         var (viewportWidth, viewportHeight) = FixedLayoutViewportSize(head);
         var width = viewportWidth ?? imageWidth ?? OriginalWidth;
         var height = viewportHeight ?? imageHeight ?? OriginalHeight;
         if (width is null || height is null)
         {
             Log.Warning($"固定版式頁 {bookPart.Filename} 沒有可用的 viewport 或圖片尺寸");
-            return;
+            return false;
         }
 
         LinkCssFile(bookPart, FixedLayoutCssFilepath);
@@ -1037,6 +1090,14 @@ public partial class KfxEpub
         var title = head.Element("title");
         var link = head.Elements("link").FirstOrDefault(l => l.Get("rel") == "stylesheet" && l.Get("href") == fixedHref);
         var viewport = head.Elements("meta").FirstOrDefault(m => m.Get("name") == "viewport");
+        if (viewport is null)
+        {
+            // 可重排書中的整頁圖片頁原本沒有 viewport，改用圖片尺寸建立。
+            viewport = new XNode("meta");
+            viewport.Set("name", "viewport");
+            viewport.Set("content", $"width={width}, height={height}");
+        }
+
         var ordered = new[] { charset, title, link, viewport }.Where(e => e is not null).ToList();
         foreach (var e in ordered) head.RemoveChild(e);
         for (var i = 0; i < ordered.Count; i++) head.Insert(i, ordered[i]);
@@ -1059,6 +1120,7 @@ public partial class KfxEpub
         image.Set("width", width.Value.ToString()).Set("height", height.Value.ToString());
         image.SetNs(XmlNamespaces.XLink, "href", src);
         image.Tail = "\n";
+        return true;
     }
 
     public (string Src, int? Width, int? Height) ExtractSingleFixedLayoutImage(BookPart bookPart, XNode body)
@@ -1118,7 +1180,8 @@ public partial class KfxEpub
     {
         var filename = PathUtil.GetUrlFilename(PathUtil.UrlAbsolutePath(src, refFrom));
         filename = PathUtil.RemoveUrlFragment(filename ?? "");
-        return OebpsFiles.TryGetValue(filename, out var file) ? (file.Width, file.Height) : (null, null);
+        if (!OebpsFiles.TryGetValue(filename, out var file)) return (null, null);
+        return (file.Width is > 0 ? file.Width : null, file.Height is > 0 ? file.Height : null);
     }
 
     public static int? FixedLayoutLength(string value)

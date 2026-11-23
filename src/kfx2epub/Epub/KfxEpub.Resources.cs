@@ -37,10 +37,14 @@ public partial class KfxEpub
         if (intResourceName != resourceName) Log.Error($"資源 {resourceName} 的內部名稱不正確：{intResourceName}");
 
         var resourceFormat = resource.Pop("$161").ToStr();
-        var fixedHeight = Convert.ToInt32(resource.Pop("$67", 0));
-        var fixedWidth = Convert.ToInt32(resource.Pop("$66", 0));
-        var resourceHeight = resource.Pop("$423") as int? ?? resource.Pop("$67") as int?;
-        var resourceWidth = resource.Pop("$422") as int? ?? resource.Pop("$66") as int?;
+        // $66/$67 也是圖片尺寸的來源，必須先保留再判斷，否則會被第一個 Pop 消耗掉。
+        // $422/$423 可能是 IonInt 或 quantity struct，需用 PixelValue 轉換。
+        var fixedHeight = PixelValue(resource.Pop("$67"), adjust: false) ?? 0;
+        var fixedWidth = PixelValue(resource.Pop("$66"), adjust: false) ?? 0;
+        var resourceHeight = PixelValue(resource.Pop("$423"), adjust: false) ??
+                             (fixedHeight > 0 ? fixedHeight : null);
+        var resourceWidth = PixelValue(resource.Pop("$422"), adjust: false) ??
+                            (fixedWidth > 0 ? fixedWidth : null);
 
         string location;
         byte[] rawMedia;

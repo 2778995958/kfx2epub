@@ -173,6 +173,10 @@ class BookPart(OPFProperties):
         self.writing_mode_value = None
         self.has_vertical_rl_class = False
 
+        # KFX 這一頁的唯一內容是一個區塊圖片容器（$270 + 區塊圖片版面），
+        # 語意上就是「整頁一張圖」，輸出時改用 fixed-layout SVG 頁面。
+        self.is_page_image = False
+
     def head(self):
         head = self.html.find("head")
         if head is None:
@@ -510,6 +514,7 @@ class EPUB_Output(object):
             self.compare_fixed_layout_viewports()
 
         self.save_book_parts()
+        self.ensure_linked_css_files()
 
         if self.ncx_location is None and (self.generate_epub2 or self.GENERATE_EPUB2_COMPATIBLE):
             self.create_ncx()
@@ -1216,14 +1221,20 @@ class EPUB_Output(object):
     def convert_to_fixed_layout_svg_page(self, book_part, head, body):
         src, image_width, image_height = self.extract_single_fixed_layout_image(book_part, body)
         if not src:
-            return
+            return False
 
         viewport_width, viewport_height = self.fixed_layout_viewport_size(head)
         width = viewport_width or image_width or self.original_width
         height = viewport_height or image_height or self.original_height
         if not width or not height:
             log.warning("Fixed-layout page %s has no usable viewport or image size; keeping original XHTML" % book_part.filename)
-            return
+            return False
+
+        if next((meta for meta in head.findall("meta") if meta.get("name") == "viewport"), None) is None:
+            # 可重排書中的整頁圖片頁原本沒有 viewport，改用圖片尺寸建立。
+            viewport_meta = etree.SubElement(head, "meta")
+            viewport_meta.set("name", "viewport")
+            viewport_meta.set("content", "width=%d, height=%d" % (int(width), int(height)))
 
         self.order_fixed_layout_head(book_part, head)
 
@@ -1250,6 +1261,8 @@ class EPUB_Output(object):
         image.set("height", "%d" % height)
         image.set(XLINK_HREF, src)
         image.tail = "\n"
+
+        return True
 
     def ensure_main_wrapper(self, body):
         # ebpaj reflowable pages use a single body > div.main container.
@@ -1342,26 +1355,44 @@ class EPUB_Output(object):
             body.attrib.pop("style", None)
         elif book_part.is_fxl:
             self.convert_to_fixed_layout_svg_page(book_part, head, body)
-        else:
-            image_only = self.is_image_only_body(body)
-
-            if image_only:
+        elif self.should_use_fixed_layout_svg(book_part, body):
+            if self.convert_to_fixed_layout_svg_page(book_part, head, body):
+                book_part.is_fxl = True
+            elif self.is_image_only_body(body):
                 self.convert_to_fit_image_page(book_part)
             else:
-                self.ensure_main_wrapper(body)
-                if book_part.filename == self.TOC_FILEPATH and not body.get("class"):
-                    body.set("class", "p-toc")
-                elif book_part.filename == self.COLOPHON_FILEPATH and not body.get("class"):
-                    body.set("class", "p-colophon")
-                elif not body.get("class"):
-                    body.set("class", "p-text")
-                if book_part.has_vertical_rl_class:
-                    existing.insert(0, "vrtl")
+                self.finalize_reflowable_body(book_part, body)
+        elif self.is_image_only_body(body):
+            self.convert_to_fit_image_page(book_part)
+        else:
+            self.finalize_reflowable_body(book_part, body)
+
+        # 電書協樣式：可重排頁的 <html> 依「這一頁在 KFX 的書寫方向」加上 vrtl 或 hltr。
+        # fixed-layout 頁（含整頁圖片頁）遵循 FXL 樣板，不加方向 class。
+        if (not book_part.is_nav and not book_part.is_fxl and book_part.writing_mode_value):
+            existing.insert(0, "vrtl" if book_part.writing_mode_value.startswith("vertical") else "hltr")
 
         if existing:
             book_part.html.set("class", " ".join(existing))
         else:
             book_part.html.attrib.pop("class", None)
+
+    def should_use_fixed_layout_svg(self, book_part, body):
+        if book_part.is_page_image:
+            return True
+
+        # KFX 的封面頁本身看不出整本書圖片頁的排版方式，跟隨本書其他圖片頁的判定。
+        return (book_part.is_cover_page and self.is_image_only_body(body) and
+                any(bp.is_page_image for bp in self.book_parts))
+
+    def finalize_reflowable_body(self, book_part, body):
+        self.ensure_main_wrapper(body)
+        if book_part.filename == self.TOC_FILEPATH and not body.get("class"):
+            body.set("class", "p-toc")
+        elif book_part.filename == self.COLOPHON_FILEPATH and not body.get("class"):
+            body.set("class", "p-colophon")
+        elif not body.get("class"):
+            body.set("class", "p-text")
 
     def format_xhtml_document_header(self, html_str):
         declaration = b'<?xml version="1.0" encoding="UTF-8"?>\n'
