@@ -1741,28 +1741,31 @@ class KFX_EPUB_Properties(object):
 
     def set_html_defaults(self):
         for book_part in self.book_parts:
-            if not book_part.is_cover_page:
-                body = book_part.body()
-                body_sty = self.get_style(body)
+            body = book_part.body()
+            body_sty = self.get_style(body)
 
-                if "font-family" not in body_sty and self.default_font_family:
-                    body_sty["font-family"] = self.default_font_family
+            # 封面頁也要記錄書寫方向，輸出 <html class="vrtl|hltr"> 時才有依據。
+            book_part.writing_mode_value = body_sty.get("writing-mode", self.writing_mode)
 
-                if "font-size" not in body_sty:
-                    body_sty["font-size"] = self.default_font_size
+            if book_part.is_cover_page:
+                continue
 
-                if "line-height" not in body_sty:
-                    body_sty["line-height"] = self.default_line_height
+            if "font-family" not in body_sty and self.default_font_family:
+                body_sty["font-family"] = self.default_font_family
 
-                if "writing-mode" not in body_sty:
-                    body_sty["writing-mode"] = self.writing_mode
+            if "font-size" not in body_sty:
+                body_sty["font-size"] = self.default_font_size
 
-                book_part.writing_mode_value = body_sty.get("writing-mode")
+            if "line-height" not in body_sty:
+                body_sty["line-height"] = self.default_line_height
 
-                self.set_style(body, body_sty)
+            if "writing-mode" not in body_sty:
+                body_sty["writing-mode"] = self.writing_mode
 
-                if self.language:
-                    book_part.html.set(XML_LANG, self.language)
+            self.set_style(body, body_sty)
+
+            if self.language:
+                book_part.html.set(XML_LANG, self.language)
 
     def simplify_styles(self, elem, book_part, inherited_properties, default_ordered_list_value=None, known_width=True):
         inherited_properties = inherited_properties.copy()
@@ -2775,6 +2778,21 @@ class KFX_EPUB_Properties(object):
                     self.STYLES_CSS_FILEPATH, data=read_bundled_style("book-style.css"), mimetype="text/css")
                 self.manifest_resource(
                     self.KFX_CSS_FILEPATH, data=self.kfx_style_css_data(), mimetype="text/css")
+
+    def ensure_linked_css_files(self):
+        # 整頁圖片頁的 fixed-layout-jp.css 是在 save_book_parts 期間才掛上，
+        # create_css_files 已於建構子執行完畢，這裡補登記到 manifest。
+        for book_part in self.book_parts:
+            for link in book_part.head().findall("link"):
+                if link.get("rel") != "stylesheet" or "href" not in link.attrib:
+                    continue
+
+                css_file = get_url_filename(urlabspath(link.get("href"), ref_from=book_part.filename))
+                if (css_file == self.FIXED_LAYOUT_CSS_FILEPATH and
+                        css_file not in self.manifest_files):
+                    self.manifest_resource(
+                        self.FIXED_LAYOUT_CSS_FILEPATH, data=read_bundled_style("fixed-layout-jp.css"),
+                        mimetype="text/css")
 
     def quote_font_name(self, value):
         for ident in value.split(" "):

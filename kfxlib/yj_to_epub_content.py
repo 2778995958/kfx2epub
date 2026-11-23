@@ -102,6 +102,9 @@ class KFX_EPUB_Content(object):
         self.reported_characters = set()
         self.text_combine_in_use = False
 
+        # 版面內容中的區塊圖片容器（$270 + 區塊圖片版面），供整頁圖片判定使用。
+        self.block_image_containers = set()
+
     def process_reading_order(self):
         used_sections = set()
         for reading_order in self.reading_orders:
@@ -436,6 +439,7 @@ class KFX_EPUB_Content(object):
 
         content_elem = etree.Element("unknown")
         discard = log_result = False
+        page_image_candidate = False
         is_top_level = parent.tag == HTML
 
         self.add_kfx_style(content, str(content.pop("$157", "")))
@@ -545,6 +549,10 @@ class KFX_EPUB_Content(object):
             if is_top_level and ((is_scale_fit_layout and self.fixed_layout) or layout == "$325"):
                 book_part.is_fxl = True
 
+            # KFX 的區塊圖片容器若只包一張圖，代表「整頁一張圖」。
+            block_image_layout = "$323" if writing_mode != "vertical-rl" else "$322"
+            page_image_candidate = layout == block_image_layout
+
             if is_scale_fit_layout:
 
                 adjust_pixel_value = not (self.is_pdf_backed_fixed_layout and is_section)
@@ -565,7 +573,7 @@ class KFX_EPUB_Content(object):
             if layout is None:
                 pass
 
-            elif layout == ("$323" if writing_mode != "vertical-rl" else "$322"):
+            elif layout == block_image_layout:
                 pass
 
             elif layout == ("$322" if writing_mode != "vertical-rl" else "$323"):
@@ -1467,6 +1475,13 @@ class KFX_EPUB_Content(object):
                                 content_elem.remove(child)
                                 content_elem = child
 
+        # 記錄「只包一張圖」的區塊圖片容器，並判斷這一頁是否只有這個容器。
+        if page_image_candidate and self.is_single_image_container(content_elem):
+            self.block_image_containers.add(content_elem)
+
+        if is_top_level and book_part is not None and self.is_page_image_root(content_elem):
+            book_part.is_page_image = True
+
         self.set_style(content_elem, content_style)
 
         if not discard:
@@ -1486,6 +1501,37 @@ class KFX_EPUB_Content(object):
             parent.append(content_elem)
 
         self.pop_context()
+
+    def is_page_image_root(self, elem):
+        # 「整頁只有一張圖片」：頁面根節點本身就是區塊圖片容器，
+        # 或根容器內只有一個區塊圖片容器，且沒有文字。
+        if elem in self.block_image_containers:
+            return not elem.text
+
+        if elem.text or len(elem) != 1:
+            return False
+
+        child = elem[0]
+        return child.tag == "div" and child in self.block_image_containers and not child.tail
+
+    @staticmethod
+    def is_single_image_container(elem):
+        # 區塊圖片容器內只有一張圖（圖片本身可能先被包在一個 div 內），沒有文字。
+        if elem.text or len(elem) != 1:
+            return False
+
+        child = elem[0]
+        if child.tail:
+            return False
+
+        if child.tag == "img":
+            return len(child) == 0
+
+        if child.tag == "div" and not child.text and len(child) == 1:
+            img = child[0]
+            return img.tag == "img" and len(img) == 0
+
+        return False
 
     def create_container(self, content_elem, content_style, tag, container_properties):
 
