@@ -203,6 +203,10 @@ public partial class KfxEpub
 
         PruneRedundantClassProperties(sortedStyles, styleClassNames);
 
+        // 記錄轉換前的樣式，供 fixed-layout 頁面直接內嵌（那些頁面不套用樣式表）。
+        var originalStyles = classes.ToDictionary(p => p.Key, p => new Style(p.Value), StringComparer.Ordinal);
+        var classUtilities = MapClassStylesToUtility(classes);
+
         foreach (var bookPart in BookParts)
         {
             foreach (var e in bookPart.Body().DescendantsAndSelf())
@@ -212,9 +216,16 @@ public partial class KfxEpub
                 var classStyle = classes[className];
                 if (bookPart.IsFxl && !selectorClasses.Contains(className) && !classStyle.ContainsKey("-kfx-media-query"))
                 {
-                    e.Set("style", classStyle.ToString());
+                    e.Set("style", originalStyles[className].ToString());
+                    continue;
                 }
-                else if (classStyle.Count == 0 && !selectorClasses.Contains(className)) e.Pop("style");
+
+                if (classUtilities.TryGetValue(className, out var utilities))
+                {
+                    foreach (var utility in utilities) AddClass(e, utility);
+                }
+
+                if (classStyle.Count == 0 && !selectorClasses.Contains(className)) e.Pop("style");
                 else
                 {
                     AddClass(e, className, before: true);
@@ -236,6 +247,197 @@ public partial class KfxEpub
         }
 
         UpdateVerticalRlClassUsage();
+    }
+
+    // 電書協樣式表中實際存在的 utility class（字級百分比、寬高尺寸）。
+    private static readonly HashSet<string> UtilityFontPercents = new(StringComparer.Ordinal)
+    {
+        "050", "060", "070", "075", "080", "085", "090", "100", "110", "115", "120",
+        "130", "140", "150", "160", "170", "180", "190", "200", "250", "300"
+    };
+
+    private static readonly HashSet<string> UtilityFontEmSizes = new(StringComparer.Ordinal)
+    {
+        "0em50", "0em60", "0em70", "0em75", "0em80", "0em85", "0em90", "1em", "1em10",
+        "1em15", "1em20", "1em30", "1em40", "1em50", "1em60", "1em70", "1em80", "1em90",
+        "2em", "2em50", "3em"
+    };
+
+    private static readonly HashSet<string> UtilityBoxPercents = new(StringComparer.Ordinal)
+    {
+        "010", "020", "025", "030", "033", "040", "050", "060", "067", "070", "075",
+        "080", "090", "100"
+    };
+
+    private static readonly HashSet<string> UtilityBoxEmSizes = new(StringComparer.Ordinal)
+    {
+        "0em25", "0em50", "0em75", "1em", "1em25", "1em50", "1em75", "2em", "2em50",
+        "3em", "4em", "5em", "5em25", "6em", "7em", "8em", "8em75", "9em", "10em",
+        "11em", "12em", "13em", "14em", "15em", "20em", "30em", "40em"
+    };
+
+    private sealed record UtilityMapping(string ClassName, string ExtraDeclaration = null);
+
+    // 把可以完整表達的宣告換成電書協 utility class，剩下的宣告留在原規則。
+    // 與 kfxlib 的 yj_to_epub_properties.py 保持相同行為。
+    private Dictionary<string, List<string>> MapClassStylesToUtility(Dictionary<string, Style> classes)
+    {
+        var classUtilities = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var (className, style) in classes)
+        {
+            List<string> utilities = null;
+            foreach (var name in style.Properties.Keys.ToList())
+            {
+                if (!TryMapUtilityProperty(name, style.Get(name), out var mapping)) continue;
+                (utilities ??= new List<string>()).Add(mapping.ClassName);
+                style.Pop(name);
+                if (mapping.ExtraDeclaration is not null && !ExtraCssRules.ContainsKey(ClassSelector(mapping.ClassName)))
+                {
+                    ExtraCssRules[ClassSelector(mapping.ClassName)] = mapping.ExtraDeclaration;
+                }
+            }
+
+            if (utilities is not null) classUtilities[className] = utilities;
+        }
+
+        return classUtilities;
+    }
+
+    private static bool TryMapUtilityProperty(string name, string value, out UtilityMapping mapping)
+    {
+        mapping = null;
+        var lower = (value ?? "").ToLowerInvariant();
+
+        switch (name)
+        {
+            case "text-align":
+                var align = lower switch
+                {
+                    "right" => "align-end", "left" => "align-left",
+                    "center" => "align-center", "justify" => "align-justify", _ => null
+                };
+                if (align is null) return false;
+                mapping = new UtilityMapping(align);
+                return true;
+
+            case "font-weight":
+                var weight = lower switch { "bold" => "bold", "normal" => "font-weight-normal", _ => null };
+                if (weight is null) return false;
+                mapping = new UtilityMapping(weight);
+                return true;
+
+            case "font-family":
+                if (lower.Contains("sans-serif")) mapping = new UtilityMapping("gfont");
+                else if (lower.Contains("serif")) mapping = new UtilityMapping("mfont");
+                return mapping is not null;
+
+            case "font-size":
+                return TryMapFontSize(lower, out mapping);
+
+            case "height":
+            case "width":
+            case "max-height":
+            case "max-width":
+                return TryMapBoxSize(name, lower, out mapping);
+
+            case "word-break":
+                var wordBreak = lower switch
+                {
+                    "break-all" => "word-break-break-all", "keep-all" => "word-break-keep-all",
+                    "normal" => "word-break-normal", _ => null
+                };
+                if (wordBreak is null) return false;
+                mapping = new UtilityMapping(wordBreak);
+                return true;
+
+            case "line-break":
+                if (lower is not ("auto" or "loose" or "normal" or "strict")) return false;
+                mapping = new UtilityMapping("line-break-" + lower);
+                return true;
+
+            case "text-orientation":
+                if (lower is not ("sideways" or "upright")) return false;
+                mapping = new UtilityMapping(lower);
+                return true;
+
+            case "text-combine-upright":
+                // 保留給 NormalizeTcySpans 判斷（會改寫成 tcy class），不在這裡轉成 upright-1。
+                return false;
+
+            case "text-emphasis-style":
+                var emphasis = lower switch { "filled sesame" => "em-sesame", "open sesame" => "em-sesame-open", _ => null };
+                if (emphasis is null) return false;
+                mapping = new UtilityMapping(emphasis);
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryMapFontSize(string value, out UtilityMapping mapping)
+    {
+        mapping = null;
+        var match = Regex.Match(value, @"^(\d+(?:\.\d+)?)(rem|%|em)$");
+        if (!match.Success) return false;
+        var magnitude = decimal.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+
+        if (match.Groups[2].Value == "em")
+        {
+            var emName = EmSizeName(magnitude);
+            if (!UtilityFontEmSizes.Contains(emName)) return false;
+            mapping = new UtilityMapping("font-" + emName);
+            return true;
+        }
+
+        // 根字級 16px、body 100%：rem 與百分比等價（已確認沒有巢狀字級）。
+        var percent = match.Groups[2].Value == "rem" ? magnitude * 100 : magnitude;
+        if (percent != decimal.Truncate(percent)) return false;
+        var digits = ((int)percent).ToString("000");
+        var className = "font-" + digits + "per";
+        mapping = new UtilityMapping(className,
+            UtilityFontPercents.Contains(digits) ? null : "font-size: " + (int)percent + "%");
+        return true;
+    }
+
+    private static bool TryMapBoxSize(string name, string value, out UtilityMapping mapping)
+    {
+        mapping = null;
+        if (value == "auto" && name is "height" or "width")
+        {
+            mapping = new UtilityMapping(name + "-auto");
+            return true;
+        }
+
+        if (value == "none" && name is "max-height" or "max-width")
+        {
+            mapping = new UtilityMapping(name + "-none");
+            return true;
+        }
+
+        var match = Regex.Match(value, @"^(\d+(?:\.\d+)?)(em|%)$");
+        if (!match.Success) return false;
+        var magnitude = decimal.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+
+        if (match.Groups[2].Value == "%")
+        {
+            if (magnitude != decimal.Truncate(magnitude)) return false;
+            var digits = ((int)magnitude).ToString("000");
+            var className = name + "-" + digits + "per";
+            mapping = new UtilityMapping(className,
+                UtilityBoxPercents.Contains(digits) ? null : name + ": " + (int)magnitude + "%");
+            return true;
+        }
+
+        var emName = EmSizeName(magnitude);
+        if (!UtilityBoxEmSizes.Contains(emName)) return false;
+        mapping = new UtilityMapping(name + "-" + emName);
+        return true;
+    }
+
+    private static string EmSizeName(decimal magnitude)
+    {
+        if (magnitude == decimal.Truncate(magnitude)) return (int)magnitude + "em";
+        return magnitude.ToString("0.00", CultureInfo.InvariantCulture).Replace(".", "em");
     }
 
     // 移除與電書協樣式表重複、或原版 EPUB 沒有的宣告，避免 style-kfx.css 多餘規則。

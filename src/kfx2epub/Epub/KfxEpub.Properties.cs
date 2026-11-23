@@ -168,6 +168,8 @@ public sealed class Style
 public partial class KfxEpub
 {
     public Dictionary<string, Style> CssRules { get; set; } = new();
+    // 轉換成電書協 utility class 時，若該 class 不存在於樣式表（例如 95% 字級），補在 style-kfx.css。
+    public Dictionary<string, string> ExtraCssRules { get; } = new(StringComparer.Ordinal);
     public Dictionary<string, Dictionary<string, Style>> MediaQueries { get; } = new();
     public List<Style> FontFaces { get; } = new();
     public Dictionary<string, string> FontNameReplacements { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -782,6 +784,11 @@ public partial class KfxEpub
     public byte[] KfxStyleCssData()
     {
         var lines = new List<string> { "@charset \"UTF-8\";" };
+        foreach (var (selector, declarations) in ExtraCssRules.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            lines.Add(selector + " {" + declarations + "}");
+        }
+
         if (FontFaces.Count > 0) lines.AddRange(FontFaces.OrderBy(f => f.ToString()).Select(ff => "@font-face {" + ff + "}"));
         if (CssRules.Count > 0) lines.AddRange(MergeCssRules(CssRules));
         foreach (var (mq, rules) in MediaQueries.OrderBy(p => p.Key, StringComparer.Ordinal))
@@ -845,7 +852,8 @@ public partial class KfxEpub
         var style = new Style(new Dictionary<string, string>());
         foreach (var className in (elem.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (!CssRules.TryGetValue(ClassSelector(className), out var classStyle)) return null;
+            // style-kfx.css 以外（電書協 utility class）的樣式不在 CssRules 中，忽略即可。
+            if (!CssRules.TryGetValue(ClassSelector(className), out var classStyle)) continue;
             style.Update(classStyle, replace: true);
         }
 
@@ -868,7 +876,9 @@ public partial class KfxEpub
                         "-webkit-word-break" or "-epub-word-break"))
                 {
                     // word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
-                    span.Set("class", "tcy");
+                    // 電書協 utility class（不在 CssRules 中）要保留，例如字級。
+                    var kept = classes.Where(c => !CssRules.ContainsKey(ClassSelector(c))).Append("tcy");
+                    span.Set("class", string.Join(" ", kept));
                 }
                 else if (!classes.Contains("tcy"))
                 {
