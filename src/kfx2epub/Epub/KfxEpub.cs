@@ -44,7 +44,6 @@ public partial class KfxEpub
         FixupStylesAndClasses();
         NormalizeTcySpans();
         NormalizeFitImageWrappers();
-        CreateCssFiles();
         PrepareBookParts();
         ReportMissingPositions();
     }

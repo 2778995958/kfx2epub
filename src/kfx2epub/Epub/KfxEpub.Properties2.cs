@@ -201,11 +201,12 @@ public partial class KfxEpub
             styleClassNames[styleStr] = className;
         }
 
-        PruneRedundantClassProperties(sortedStyles, styleClassNames);
+        var styleUsage = CollectStyleUsage(styleClassNames);
+        PruneRedundantClassProperties(sortedStyles, styleClassNames, styleUsage);
 
         // 記錄轉換前的樣式，供 fixed-layout 頁面直接內嵌（那些頁面不套用樣式表）。
         var originalStyles = classes.ToDictionary(p => p.Key, p => new Style(p.Value), StringComparer.Ordinal);
-        var classUtilities = MapClassStylesToUtility(classes);
+        var classUtilities = MapClassStylesToUtility(classes, styleUsage);
 
         foreach (var bookPart in BookParts)
         {
@@ -278,18 +279,134 @@ public partial class KfxEpub
 
     private sealed record UtilityMapping(string ClassName, string ExtraDeclaration = null);
 
+    private sealed class StyleUsage
+    {
+        public readonly HashSet<string> Tags = new(StringComparer.Ordinal);
+        public bool AllHeadings = true;
+        public bool AllTextInLinks = true;
+        public bool AllHr = true;
+        public bool AllBodyWithoutText = true;
+        public bool BodyOnly = true;
+        public string Direction;          // "vrtl" / "hltr"，混用時為 null
+        public double FontPx = 16;
+        public bool HasDirection;
+    }
+
+    // 收集每個樣式字串被哪些元素使用，供「可省略宣告」與「方向相關 class」判斷。
+    private Dictionary<string, StyleUsage> CollectStyleUsage(Dictionary<string, string> styleClassNames)
+    {
+        var usage = new Dictionary<string, StyleUsage>(StringComparer.Ordinal);
+        foreach (var bookPart in BookParts)
+        {
+            var direction = bookPart.IsFxl || bookPart.IsNav || string.IsNullOrEmpty(bookPart.WritingModeValue)
+                ? null
+                : (IsVerticalWritingMode(bookPart.WritingModeValue) ? "vrtl" : "hltr");
+
+            foreach (var e in bookPart.Body().DescendantsAndSelf())
+            {
+                var styleStr = e.Get("style", "");
+                if (styleStr is null || !styleClassNames.TryGetValue(styleStr, out var className)) continue;
+                if (!usage.TryGetValue(className, out var info)) usage[className] = info = new StyleUsage();
+
+                info.Tags.Add(e.Name);
+                info.AllHeadings &= e.Name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6";
+                info.AllHr &= e.Name == "hr";
+                info.BodyOnly &= e.Name == "body";
+                info.AllTextInLinks &= TextOnlyInsideLinks(e);
+                if (e.IsLocal("body"))
+                {
+                    var inlineChildren = e.Children.Any(c => InlineTags.Contains(c.Name));
+                    info.AllBodyWithoutText &= string.IsNullOrWhiteSpace(e.Text) && !inlineChildren && e.Children.Count > 0;
+                }
+
+                if (direction is not null)
+                {
+                    if (!info.HasDirection)
+                    {
+                        info.HasDirection = true;
+                        info.Direction = direction;
+                    }
+                    else if (info.Direction != direction)
+                    {
+                        info.Direction = null;
+                    }
+                }
+
+
+                var fontPx = StyleFontPx(GetStyle(e));
+                if (fontPx is not null) info.FontPx = fontPx.Value;
+            }
+        }
+
+        return usage;
+    }
+
+    private static readonly HashSet<string> InlineTags = new(StringComparer.Ordinal)
+    {
+        "span", "a", "b", "i", "em", "strong", "sub", "sup", "code", "ruby", "rt", "rp", "br", "img"
+    };
+
+    private static double? StyleFontPx(Style style)
+    {
+        var value = style.Get("font-size");
+        if (string.IsNullOrEmpty(value)) return null;
+        var match = Regex.Match(value, @"^(\d+(?:\.\d+)?)(rem|em|%|px)$");
+        if (!match.Success) return null;
+        var magnitude = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+        return match.Groups[2].Value switch
+        {
+            "rem" => magnitude * 16.0,
+            "em" => magnitude * 16.0,
+            "%" => magnitude / 100.0 * 16.0,
+            _ => magnitude
+        };
+    }
+
     // 把可以完整表達的宣告換成電書協 utility class，剩下的宣告留在原規則。
     // 與 kfxlib 的 yj_to_epub_properties.py 保持相同行為。
-    private Dictionary<string, List<string>> MapClassStylesToUtility(Dictionary<string, Style> classes)
+    private Dictionary<string, List<string>> MapClassStylesToUtility(Dictionary<string, Style> classes,
+        Dictionary<string, StyleUsage> usage)
     {
         var classUtilities = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (className, style) in classes)
         {
+            var info = usage.GetValueOrDefault(className) ?? new StyleUsage();
+
+            // <hr>：電書協的 .hltr/.vrtl hr 特異度更高，會覆蓋樣式與邊距；
+            // 若寬度、顏色又與 hr 基本規則相同，整個樣式就是多餘的。
+            if (info.AllHr && IsRedundantHrStyle(style))
+            {
+                style.Properties.Clear();
+                continue;
+            }
+
+            // 標題上「一行高」的段前距（1rem）：bw 沒有這個宣告。
+            if (info.AllHeadings && info.FontPx > 0 &&
+                IsOneRemMargin(style.Get("margin-top"), info.FontPx))
+            {
+                style.Pop("margin-top");
+            }
+
             List<string> utilities = null;
+
+            var hanging = TryMapHangingIndent(style, info.Direction, out var hangingClass);
+            if (hanging)
+            {
+                (utilities ??= new List<string>()).Add(hangingClass);
+            }
+
+            // body 的 text-indent 只會被後方的 p/div reset 蓋掉（沒有直接文字時）。
+            if (!hanging && info.BodyOnly && info.AllBodyWithoutText) style.Pop("text-indent");
+
+            if (TryMapBorders(style, out var borderClasses))
+            {
+                (utilities ??= new List<string>()).AddRange(borderClasses);
+            }
+
             foreach (var name in style.Properties.Keys.ToList())
             {
-                if (!TryMapUtilityProperty(name, style.Get(name), out var mapping)) continue;
-                (utilities ??= new List<string>()).Add(mapping.ClassName);
+                var mapped = TryMapUtilityProperty(name, style.Get(name), info.Direction, out var mapping);
+                if (!mapped) continue;                (utilities ??= new List<string>()).Add(mapping.ClassName);
                 style.Pop(name);
                 if (mapping.ExtraDeclaration is not null && !ExtraCssRules.ContainsKey(ClassSelector(mapping.ClassName)))
                 {
@@ -303,10 +420,166 @@ public partial class KfxEpub
         return classUtilities;
     }
 
-    private static bool TryMapUtilityProperty(string name, string value, out UtilityMapping mapping)
+    private static bool IsOneRemMargin(string value, double fontPx)
+    {
+        var match = Regex.Match(value ?? "", @"^(\d+(?:\.\d+)?)em$");
+        if (!match.Success) return false;
+        var px = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) * fontPx;
+        return Math.Abs(px - 16.0) <= 0.5;
+    }
+
+    private static bool IsRedundantHrStyle(Style style)
+    {
+        foreach (var (name, value) in style.Properties)
+        {
+            if (name.StartsWith("margin-", StringComparison.Ordinal)) continue;
+            if (name == "border-width" || name.EndsWith("-width", StringComparison.Ordinal))
+            {
+                if (value != "1px") return false;
+                continue;
+            }
+
+            if (name == "border-color" || name.EndsWith("-color", StringComparison.Ordinal))
+            {
+                if (value is not ("black" or "#000000" or "#000")) return false;
+                continue;
+            }
+
+            if (name == "border-style" || name.EndsWith("-style", StringComparison.Ordinal))
+            {
+                if (value is not ("solid" or "none")) return false;
+                continue;
+            }
+
+            return false;
+        }
+
+        return style.Properties.Keys.Any(k => k.StartsWith("border", StringComparison.Ordinal));
+    }
+
+    // KFX 百分比邊距的版面基準寬度；由 10%↔4em、15%↔6em、2.5%↔1em 三組對照推得。
+    private const double KfxLayoutWidthEm = 40;
+
+    // padding-top/left 與負 text-indent 同值 → 電書協的 h-indent（方向相依）。
+    // KFX 也可能用百分比表示同一件事：margin M% + text-indent -M/(1-M)%。
+    private static bool TryMapHangingIndent(Style style, string direction, out string className)
+    {
+        className = null;
+        if (direction is null) return false;
+
+        var percentIndent = Regex.Match(style.Get("text-indent") ?? "", @"^-(\d+(?:\.\d+)?)%$");
+        if (percentIndent.Success)
+        {
+            var startMargin = direction == "vrtl" ? "margin-top" : "margin-left";
+            var margin = Regex.Match(style.Get(startMargin) ?? "", @"^(\d+(?:\.\d+)?)%$");
+            if (!margin.Success) return false;
+            var marginPercent = double.Parse(margin.Groups[1].Value, CultureInfo.InvariantCulture);
+            var indentPercent = double.Parse(percentIndent.Groups[1].Value, CultureInfo.InvariantCulture);
+            if (marginPercent <= 0 || marginPercent >= 100) return false;
+            // 百分比 text-indent 是相對元素自己的內容寬度，因此要扣掉 margin 後的寬度。
+            if (Math.Abs(indentPercent - marginPercent / (1 - marginPercent / 100.0)) > 0.01) return false;
+
+            var emMagnitude = marginPercent * KfxLayoutWidthEm / 100.0;
+            if (Math.Abs(emMagnitude - Math.Round(emMagnitude)) > 1e-6) return false;
+            var emValue = (int)Math.Round(emMagnitude);
+            if (emValue < 1 || emValue > 10) return false;
+            var percentName = "h-indent-" + emValue + "em";
+            if (!UtilityClassNames.Contains(percentName)) return false;
+
+            style.Pop(startMargin);
+            style.Pop("text-indent");
+            className = percentName;
+            return true;
+        }
+
+        var match = Regex.Match(style.Get("text-indent") ?? "", @"^-(\d+(?:\.\d+)?)em$");
+        if (!match.Success) return false;
+        var magnitude = decimal.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+        var padSide = direction == "vrtl" ? "padding-top" : "padding-left";
+        var padding = Regex.Match(style.Get(padSide) ?? "", @"^(\d+(?:\.\d+)?)em$");
+        if (!padding.Success) return false;
+        if (decimal.Parse(padding.Groups[1].Value, CultureInfo.InvariantCulture) != magnitude) return false;
+
+        var name = "h-indent-" + EmSizeName(magnitude);
+        if (magnitude != decimal.Truncate(magnitude) || magnitude < 1 || magnitude > 10) return false;
+        style.Pop("text-indent");
+        style.Pop(padSide);
+        className = name;
+        return true;
+    }
+
+    // 框線：四邊 solid、單邊 solid、上下／左右 solid。
+    private static bool TryMapBorders(Style style, out List<string> classes)
+    {
+        classes = null;
+        var sides = new[] { "top", "right", "bottom", "left" };
+        var styles = sides.ToDictionary(s => s, s => style.Get($"border-{s}-style"));
+        var width = style.Get("border-width") ?? style.Get("border-top-width");
+        var color = style.Get("border-color") ?? style.Get("border-top-color");
+
+        var shorthand = style.Get("border-style");
+        if (shorthand is not null)
+        {
+            var parts = shorthand.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var expanded = parts.Length switch
+            {
+                1 => Enumerable.Repeat(parts[0], 4).ToArray(),
+                2 => new[] { parts[0], parts[1], parts[0], parts[1] },
+                4 => parts,
+                _ => null
+            };
+            if (expanded is null) return false;
+            for (var i = 0; i < 4; i++) styles[sides[i]] = expanded[i];
+        }
+        else if (styles.Values.Any(v => v is null)) return false;
+
+        var solid = sides.Where(s => styles[s] == "solid").ToList();
+        if (sides.Any(s => styles[s] is not ("solid" or "none"))) return false;
+        if (width is not null && width != "1px") return false;
+        if (color is not null && color is not ("black" or "#000000" or "#000")) return false;
+
+        var list = new List<string>();
+        if (solid.Count == 4) list.Add("k-solid");
+        else if (solid.Count == 2 && solid.SequenceEqual(new[] { "top", "bottom" })) list.Add("k-solid-topbottom");
+        else if (solid.Count == 2 && solid.SequenceEqual(new[] { "left", "right" })) list.Add("k-solid-rightleft");
+        else if (solid.Count == 1)
+        {
+            list.Add("k-solid-" + solid[0]);
+            list.Add("k-1px");
+        }
+        else return false;
+
+        if (solid.Count != 4)
+        {
+            if (width == "1px" && !list.Contains("k-1px")) list.Add("k-1px");
+            if (color is "black" or "#000000" or "#000") list.Add("k-black");
+        }
+
+        foreach (var side in sides)
+        {
+            style.Pop($"border-{side}-style");
+            style.Pop($"border-{side}-width");
+            style.Pop($"border-{side}-color");
+        }
+
+        style.Pop("border-style");
+        style.Pop("border-width");
+        style.Pop("border-color");
+        style.Pop("border-top-width");
+        style.Pop("border-top-color");
+        classes = list.Distinct().ToList();
+        return true;
+    }
+
+    private static bool TryMapUtilityProperty(string name, string value, string direction, out UtilityMapping mapping)
     {
         mapping = null;
         var lower = (value ?? "").ToLowerInvariant();
+
+        if (name.StartsWith("margin", StringComparison.Ordinal) || name.StartsWith("padding", StringComparison.Ordinal))
+        {
+            return TryMapLogicalBox(name, lower, direction, out mapping);
+        }
 
         switch (name)
         {
@@ -440,38 +713,99 @@ public partial class KfxEpub
         return magnitude.ToString("0.00", CultureInfo.InvariantCulture).Replace(".", "em");
     }
 
-    // 移除與電書協樣式表重複、或原版 EPUB 沒有的宣告，避免 style-kfx.css 多餘規則。
-    private void PruneRedundantClassProperties(List<(string StyleStr, Style Style, string ClassName)> sortedStyles,
-        Dictionary<string, string> styleClassNames)
+    // 電書協樣式表中實際存在的 utility class 名稱（啟動時由內嵌 CSS 解析）。
+    private static HashSet<string> _utilityClassNames;
+
+    private static HashSet<string> UtilityClassNames => _utilityClassNames ??= LoadUtilityClassNames();
+
+    private static HashSet<string> LoadUtilityClassNames()
     {
-        // 記錄每個樣式被哪些元素使用，用元素結構判斷宣告是否可以省略。
-        var textOnlyInLinks = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var onlyInHeadings = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var bookPart in BookParts)
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in new[] { "style-standard.css", "style-advance.css" })
         {
-            foreach (var e in bookPart.Body().DescendantsAndSelf())
+            var css = System.Text.Encoding.UTF8.GetString(ReadBundledStyle(file));
+            foreach (Match match in Regex.Matches(css, @"\.([A-Za-z][\w-]*)"))
             {
-                var styleStr = e.Get("style", "");
-                if (styleStr is null || !styleClassNames.ContainsKey(styleStr)) continue;
-
-                var inLinks = TextOnlyInsideLinks(e);
-                textOnlyInLinks[styleStr] = textOnlyInLinks.TryGetValue(styleStr, out var previousLink)
-                    ? previousLink && inLinks
-                    : inLinks;
-
-                var isHeading = e.Name is "h1" or "h2" or "h3" or "h4" or "h5" or "h6";
-                onlyInHeadings[styleStr] = onlyInHeadings.TryGetValue(styleStr, out var previousHeading)
-                    ? previousHeading && isHeading
-                    : isHeading;
+                names.Add(match.Groups[1].Value);
             }
         }
 
+        return names;
+    }
+
+    // 邊距／內距：依頁面方向換成邏輯 class（m-start / p-after …）；行首字下げ用 start-*。
+    private static bool TryMapLogicalBox(string name, string value, string direction, out UtilityMapping mapping)
+    {
+        mapping = null;
+        if (direction is null) return false;
+
+        if (name is "margin" or "padding")
+        {
+            var size = BoxSizeName(value);
+            if (size is null) return false;
+            var shorthand = (name == "margin" ? "m-" : "p-") + size;
+            if (!UtilityClassNames.Contains(shorthand)) return false;
+            mapping = new UtilityMapping(shorthand);
+            return true;
+        }
+
+        var side = name[(name.LastIndexOf('-') + 1)..];
+        if (side is not ("top" or "bottom" or "left" or "right")) return false;
+        var logical = direction == "vrtl"
+            ? side switch { "top" => "start", "bottom" => "end", "left" => "after", "right" => "before", _ => null }
+            : side switch { "top" => "before", "bottom" => "after", "left" => "start", "right" => "end", _ => null };
+        if (logical is null) return false;
+
+        var isMargin = name.StartsWith("margin", StringComparison.Ordinal);
+        var boxSize = BoxSizeName(value);
+        if (boxSize is null) return false;
+
+        var candidates = new List<string>();
+        if (isMargin && logical == "start" && boxSize.EndsWith("em", StringComparison.Ordinal))
+        {
+            candidates.Add("start-" + boxSize);
+        }
+
+        candidates.Add((isMargin ? "m-" : "p-") + logical + "-" + boxSize);
+        foreach (var candidate in candidates)
+        {
+            if (!UtilityClassNames.Contains(candidate)) continue;
+            mapping = new UtilityMapping(candidate);
+            return true;
+        }
+
+        return false;
+    }
+
+    // utility 命名：1em / 0em25 / 010per；不在網格回傳 null。
+    private static string BoxSizeName(string value)
+    {
+        var match = Regex.Match(value ?? "", @"^(\d+(?:\.\d+)?)(em|%)$");
+        if (!match.Success) return null;
+        var magnitude = decimal.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture);
+        if (match.Groups[2].Value == "%")
+        {
+            if (magnitude != decimal.Truncate(magnitude)) return null;
+            return ((int)magnitude).ToString("000") + "per";
+        }
+
+        return EmSizeName(magnitude);
+    }
+
+    // 移除與電書協樣式表重複、或原版 EPUB 沒有的宣告，避免 style-kfx.css 多餘規則。
+    private void PruneRedundantClassProperties(List<(string StyleStr, Style Style, string ClassName)> sortedStyles,
+        Dictionary<string, string> styleClassNames, Dictionary<string, StyleUsage> usage)
+    {
         foreach (var (styleStr, style, _) in sortedStyles)
         {
-            // page-break-inside 仍用於圖片外框的辨識（NormalizeFitImageWrappers），只在標題上省略。
-            if (onlyInHeadings.GetValueOrDefault(styleStr)) style.Pop("page-break-inside");
+            if (!styleClassNames.TryGetValue(styleStr, out var className)) continue;
+            var info = usage.GetValueOrDefault(className);
+            if (info is null) continue;
 
-            if (!textOnlyInLinks.GetValueOrDefault(styleStr)) continue;
+            // page-break-inside 仍用於圖片外框的辨識（NormalizeFitImageWrappers），只在標題上省略。
+            if (info.AllHeadings) style.Pop("page-break-inside");
+
+            if (!info.AllTextInLinks) continue;
 
             // style-standard.css 的 a:link 已是 #0000ff。
             if (style.Get("color") is "blue" or "#0000ff") style.Pop("color");
@@ -574,7 +908,9 @@ public partial class KfxEpub
         var origStyle = new Style(style);
         style.Pop("-kfx-render");
 
-        if (bookPart.IsFxl && (elem.IsLocal("a") || elem.IsLocal("span")) &&
+        // 電書協的中央寄せ樣式（span + div）靠 inline 元素上的 width/height 生效，
+        // 因此可重排頁也要補上 display:inline-block（不限 fixed-layout）。
+        if ((elem.IsLocal("a") || elem.IsLocal("span")) &&
             style.Get("display", "inline") == "inline" && (style.ContainsKey("height") || style.ContainsKey("width")))
         {
             style.Set("display", "inline-block");

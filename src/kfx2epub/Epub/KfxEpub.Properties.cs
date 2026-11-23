@@ -765,10 +765,58 @@ public partial class KfxEpub
                 ManifestResource(StandardCssFilepath, data: ReadBundledStyle("style-standard.css"), mimetype: "text/css");
                 ManifestResource(AdvanceCssFilepath, data: ReadBundledStyle("style-advance.css"), mimetype: "text/css");
                 ManifestResource(CheckCssFilepath, data: ReadBundledStyle("style-check.css"), mimetype: "text/css");
-                ManifestResource(StylesCssFilepath, data: ReadBundledStyle("book-style.css"), mimetype: "text/css");
-                ManifestResource(KfxCssFilepath, data: KfxStyleCssData(), mimetype: "text/css");
+
+                var includePublisherCss = UsesPublisherCss();
+                var hasKfxCss = HasKfxCssRules();
+                ManifestResource(StylesCssFilepath, data: BookStyleCssData(includePublisherCss, hasKfxCss),
+                    mimetype: "text/css");
+
+                if (includePublisherCss)
+                {
+                    ManifestResource(KarcCssFilepath, data: ReadBundledStyle("style-karc.css"), mimetype: "text/css");
+                    ManifestResource(KadokawaCssFilepath, data: ReadBundledStyle("style-kadokawa.css"), mimetype: "text/css");
+                }
+
+                if (hasKfxCss)
+                {
+                    ManifestResource(KfxCssFilepath, data: KfxStyleCssData(), mimetype: "text/css");
+                }
             }
         }
+    }
+
+    // style-kfx.css 只有在真的產生規則時才輸出並 @import。
+    private bool HasKfxCssRules()
+        => CssRules.Count > 0 || MediaQueries.Count > 0 || FontFaces.Count > 0 || ExtraCssRules.Count > 0;
+
+    // 出版社樣式表只在角川系的書插入（bw 的 3 本角川書都有 style-kadokawa.css / style-karc.css）。
+    private bool UsesPublisherCss()
+    {
+        var publisher = (Publisher ?? "").Normalize(NormalizationForm.FormKC).ToLowerInvariant();
+        return publisher.Contains("kadokawa") || publisher.Contains("角川");
+    }
+
+    private byte[] BookStyleCssData(bool includePublisherCss, bool hasKfxCss)
+    {
+        var text = Encoding.UTF8.GetString(ReadBundledStyle("book-style.css"));
+        text = Regex.Replace(text, "^@import\\s+\"style-kfx\\.css\";\\r?\\n", "", RegexOptions.Multiline);
+
+        var imports = new StringBuilder();
+        if (includePublisherCss)
+        {
+            imports.Append("@import \"style-karc.css\";\r\n");
+            imports.Append("@import \"style-kadokawa.css\";\r\n");
+        }
+
+        if (hasKfxCss) imports.Append("@import \"style-kfx.css\";\r\n");
+
+        if (imports.Length > 0)
+        {
+            text = Regex.Replace(text, "^(@import\\s+\"style-advance\\.css\";\\r?\\n)",
+                "$1" + imports, RegexOptions.Multiline);
+        }
+
+        return Encoding.UTF8.GetBytes(text);
     }
 
     public static byte[] ReadBundledStyle(string filename)

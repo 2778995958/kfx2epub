@@ -206,6 +206,8 @@ public partial class KfxEpub
     public const string StandardCssFilepath = "/style/style-standard.css";
     public const string AdvanceCssFilepath = "/style/style-advance.css";
     public const string CheckCssFilepath = "/style/style-check.css";
+    public const string KadokawaCssFilepath = "/style/style-kadokawa.css";
+    public const string KarcCssFilepath = "/style/style-karc.css";
     public const string FixedLayoutCssFilepath = "/style/fixed-layout-jp.css";
     public const string LayoutCssFilepath = "/style/layout%04d.css";
 
@@ -395,12 +397,15 @@ public partial class KfxEpub
             RenameSpineBookParts();
         }
 
+        ApplyPageTypeClasses();
+
         if (FixedLayout && (OriginalHeight is null || OriginalWidth is null) && (IsComic || IsChildren))
         {
             CompareFixedLayoutViewports();
         }
 
         SaveBookParts();
+        CreateCssFiles();
         EnsureLinkedCssFiles();
         CreateOpf();
         return ZipEpub();
@@ -992,6 +997,86 @@ public partial class KfxEpub
         if (bookPart.Filename == TocFilepath && !body.Has("class")) body.Set("class", "p-toc");
         else if (bookPart.Filename == ColophonFilepath && !body.Has("class")) body.Set("class", "p-colophon");
         else if (!body.Has("class")) body.Set("class", "p-text");
+    }
+
+    // 在產生 CSS 之前先補上頁型 class，讓出版社 CSS（style-kadokawa.css 等）能命中，
+    // 並移除 KFX 模擬用的 body 邊距，避免與 .main 的內距疊加。
+    public void ApplyPageTypeClasses()
+    {
+        var publisherCss = UsesPublisherCss();
+        var colophon = BookParts.FirstOrDefault(bp => bp.Filename == ColophonFilepath);
+        var colophonSpacingClass = colophon is null ? null : FindBodySpacingClass(colophon.Body());
+
+        foreach (var bookPart in BookParts)
+        {
+            if (bookPart.IsNav) continue;
+            var body = bookPart.Body();
+            if (bookPart.IsFxl || ShouldUseFixedLayoutSvg(bookPart, body) || IsImageOnlyBody(body)) continue;
+
+            var pageClass = bookPart.Filename == TocFilepath ? "p-toc"
+                : bookPart.Filename == ColophonFilepath ? "p-colophon"
+                : "p-text";
+            if (publisherCss && pageClass != "p-toc")
+            {
+                var spacingClass = FindBodySpacingClass(body);
+                if (spacingClass is not null)
+                {
+                    if (pageClass == "p-colophon")
+                    {
+                        RemoveClass(body, spacingClass);
+                    }
+                    else if (HasCenterTextAlign(body))
+                    {
+                        pageClass = "p-titlepage";
+                        RemoveClass(body, spacingClass);
+                    }
+                    else if (spacingClass == colophonSpacingClass)
+                    {
+                        pageClass = "p-colophon2";
+                        RemoveClass(body, spacingClass);
+                    }
+                }
+            }
+
+            AddClass(body, pageClass);
+        }
+    }
+
+    // body 上的樣式若只有 margin-left/right + padding-top/bottom 且左右為百分比，
+    // 代表它是 KFX 模擬 .p-colophon .main 等頁面內距的樣式。
+    private static bool IsBodySpacingStyle(Style style)
+    {
+        if (style.Count == 0) return false;
+        if (!style.Properties.Keys.All(k => k is "margin-left" or "margin-right" or "padding-top" or "padding-bottom"))
+            return false;
+        return style.Get("margin-left", "").EndsWith("%", StringComparison.Ordinal) ||
+               style.Get("margin-right", "").EndsWith("%", StringComparison.Ordinal);
+    }
+
+    private string FindBodySpacingClass(XNode body)
+    {
+        foreach (var className in (body.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (CssRules.TryGetValue(ClassSelector(className), out var style) && IsBodySpacingStyle(style))
+                return className;
+        }
+
+        return null;
+    }
+
+    private static bool HasCenterTextAlign(XNode body)
+    {
+        var classes = (body.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (classes.Contains("align-center")) return true;
+        return Regex.IsMatch(body.Get("style", "") ?? "", @"(^|;)\s*text-align\s*:\s*center");
+    }
+
+    private static void RemoveClass(XNode elem, string className)
+    {
+        var classes = (elem.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Where(c => c != className).ToList();
+        if (classes.Count > 0) elem.Set("class", string.Join(" ", classes));
+        else elem.Pop("class");
     }
 
     public string FormatXhtmlDocumentHeader(string html)
