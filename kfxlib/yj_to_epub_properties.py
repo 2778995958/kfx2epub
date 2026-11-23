@@ -32,6 +32,18 @@ EMIT_WEBKIT_EQUIVALENTS = False
 RESET_DEFAULT_MARGIN_TAGS = {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6"}
 RESET_DEFAULT_FONT_FAMILIES = {"JA,serif", "V,JA,serif", "serif-ja,serif", "serif-ja, serif"}
 
+# KFX 以區塊方向的 lh margin 表示空段落。這裡先標記，
+# 等 simplify_styles 決定元素的最終標籤後，再插入 <p><br/></p>。
+BLANK_BEFORE_PROPERTY = "-kfx-blank-before"
+BLANK_AFTER_PROPERTY = "-kfx-blank-after"
+BLANK_ORIG_BEFORE_PROPERTY = "-kfx-blank-orig-before"
+BLANK_ORIG_AFTER_PROPERTY = "-kfx-blank-orig-after"
+BLANK_PROP_BEFORE_PROPERTY = "-kfx-blank-prop-before"
+BLANK_PROP_AFTER_PROPERTY = "-kfx-blank-prop-after"
+BLANK_LINE_REM = decimal.Decimal("1.05")
+
+BOX_PADDING_PROPERTIES = {"padding", "padding-top", "padding-right", "padding-bottom", "padding-left"}
+
 REVERSE_INHERITANCE = True
 REVERSE_INHERITANCE_FRACTION = 0.8
 
@@ -1440,7 +1452,11 @@ class KFX_EPUB_Properties(object):
             if lang:
                 heritable_default_properties.update(self.Style({"-kfx-attrib-xml-lang": lang}), replace=True)
 
+            self.page_writing_mode = (self.get_style(book_part.body()).get("writing-mode", self.writing_mode) or
+                                      self.writing_mode)
             self.simplify_styles(book_part.body(), book_part, heritable_default_properties)
+
+            self.expand_block_margins(book_part)
 
             self.add_composite_and_equivalent_styles(book_part.body(), book_part)
 
@@ -1791,19 +1807,35 @@ class KFX_EPUB_Properties(object):
 
                 if unit == "lh" and quantity is not None:
                     if name == "line-height":
-                        if USE_NORMAL_LINE_HEIGHT and quantity >= 0.99 and quantity <= 1.01:
-                            sty[name] = "normal"
-                        else:
-                            quantity = quantity * LINE_HEIGHT_SCALE_FACTOR
+                        # 與 bw 一致：不輸出 KFX 的 line-height，讓元素繼承 body 的 1.75。
+                        sty.pop(name)
+                        continue
 
-                            if (MINIMUM_LINE_HEIGHT is not None) and (quantity < MINIMUM_LINE_HEIGHT):
-                                quantity = MINIMUM_LINE_HEIGHT
+                    writing_mode = sty.get("writing-mode", self.page_writing_mode)
+                    side = self.block_margin_side(name, writing_mode)
+                    if side is not None:
+                        lines = self.count_blank_lines(elem, name, quantity, sty, writing_mode)
+                        if lines > 0:
+                            sty.pop(name)
+                            self.add_blank_marker(sty, name, side, lines, quantity * LINE_HEIGHT_SCALE_FACTOR)
+                            continue
 
-                            sty[name] = value_str(quantity)
-                    else:
-                        sty[name] = value_str(quantity * LINE_HEIGHT_SCALE_FACTOR, "em")
-
+                    sty[name] = value_str(quantity * LINE_HEIGHT_SCALE_FACTOR, "em")
                     quantity, unit = split_value(sty[name])
+
+                elif unit == "em" and self.has_box_border_or_padding(sty):
+                    # 框線方塊本身的 em margin 也可能帶一個空行（例如特典框）。
+                    writing_mode = sty.get("writing-mode", self.page_writing_mode)
+                    side = self.block_margin_side(name, writing_mode)
+                    if side is not None and self.is_vertical_writing_mode(writing_mode):
+                        font_size_rem = self.resolve_font_size_rem(sty.get("font-size"))
+                        exact_lines = quantity * font_size_rem / BLANK_LINE_REM
+                        rounded = int(exact_lines + decimal.Decimal("0.5"))
+                        lines = max(0, rounded - 1)
+                        if lines > 0:
+                            sty.pop(name)
+                            self.add_blank_marker(sty, name, side, lines, quantity)
+                            continue
 
                 if unit == "rem" and quantity is not None and (self.generate_epub2 or self.GENERATE_EPUB2_COMPATIBLE):
                     if name == "font-size":
@@ -2036,6 +2068,9 @@ class KFX_EPUB_Properties(object):
             if val == inherited_properties.get(name, ""):
                 sty.pop(name)
 
+        # 與 bw 一致：不輸出 KFX 的 line-height，讓元素繼承 reset 的 body 1.75。
+        sty.pop("line-height", None)
+
         self.set_style(elem, sty)
 
         contains_block_elem = contains_block_elem or elem.tag in {
@@ -2045,6 +2080,177 @@ class KFX_EPUB_Properties(object):
         contains_image = contains_image or elem.tag == "img" or elem.tag == "svg"
 
         return (contains_block_elem, contains_text, contains_image)
+
+    # 依「區塊方向」判斷 margin 是否是空行。
+    # 直排的區塊方向是水平（右→左），橫排是垂直（上→下）。
+    @staticmethod
+    def block_margin_side(name, writing_mode):
+        mode = writing_mode or "horizontal-tb"
+        if mode.startswith("vertical"):
+            rtl = mode.endswith("-rl")
+            if name == ("margin-right" if rtl else "margin-left"):
+                return "before"
+            if name == ("margin-left" if rtl else "margin-right"):
+                return "after"
+            return None
+
+        if name == "margin-top":
+            return "before"
+        if name == "margin-bottom":
+            return "after"
+        return None
+
+    @staticmethod
+    def is_vertical_writing_mode(writing_mode):
+        return writing_mode is not None and writing_mode.startswith("vertical")
+
+    @staticmethod
+    def resolve_font_size_rem(value):
+        quantity, unit = split_value(value or "")
+        if quantity is None:
+            return decimal.Decimal(1)
+        if unit in {"rem", "em"}:
+            return quantity
+        if unit == "%":
+            return quantity / 100
+        if unit == "px":
+            return quantity / 16
+        return decimal.Decimal(1)
+
+    @staticmethod
+    def has_box_border_or_padding(sty):
+        has_border = False
+        has_padding = False
+        for name, value in sty.items():
+            if value is None:
+                continue
+            if name in {"border", "border-top", "border-right", "border-bottom", "border-left"}:
+                if value not in {"none", "0", "0px"}:
+                    has_border = True
+            elif name in {"border-style", "border-top-style", "border-right-style", "border-bottom-style",
+                          "border-left-style"}:
+                if value not in {"none", "hidden"}:
+                    has_border = True
+            elif name in BOX_PADDING_PROPERTIES:
+                if value not in {"0", "0px", "0em", "0%"}:
+                    has_padding = True
+
+        if has_border:
+            return True
+        if not has_padding:
+            return False
+
+        # 只有 padding 沒有框線時，通常只是版面間距（例如口絵頁的字下げ）；
+        # 有背景色/背景圖才視為真正的方塊。
+        background_color = sty.get("background-color", "transparent")
+        return (background_color not in {None, "transparent", "#0", "rgba(0,0,0,0)"} or
+                sty.get("background-image", "none") not in {None, "none"})
+
+    @staticmethod
+    def is_first_block_after_hr(elem):
+        previous = elem.getprevious()
+        return previous is not None and previous.tag == "hr"
+
+    def count_blank_lines(self, elem, name, raw_lh, sty, writing_mode):
+        is_box = elem.tag != "hr" and self.has_box_border_or_padding(sty)
+        font_size_rem = self.resolve_font_size_rem(sty.get("font-size"))
+        exact_lines = raw_lh * LINE_HEIGHT_SCALE_FACTOR * font_size_rem / BLANK_LINE_REM
+        rounded = int(exact_lines + decimal.Decimal("0.5"))
+
+        if is_box:
+            # 橫排頁面的框線方塊 margin 是版面間距，不是空行。
+            if not self.is_vertical_writing_mode(writing_mode):
+                return 0
+            # 直排頁面的框線方塊 margin 會含一份方塊本身的間距；扣掉一行再判斷。
+            return max(0, rounded - 1)
+
+        if rounded < 1:
+            return 0
+
+        if self.is_vertical_writing_mode(writing_mode):
+            return rounded
+
+        # 橫排頁面的 margin-top/bottom 也常用於 colophon 的細部間距；
+        # 只接受接近整行的值，以及 hr 與緊接 hr 的區塊。
+        if elem.tag == "hr" or self.is_first_block_after_hr(elem):
+            return rounded
+        return rounded if abs(exact_lines - rounded) <= decimal.Decimal("0.05") * max(1, rounded) else 0
+
+    @staticmethod
+    def add_blank_marker(sty, prop_name, side, lines, em_value):
+        before = side == "before"
+        key = BLANK_BEFORE_PROPERTY if before else BLANK_AFTER_PROPERTY
+        orig_key = BLANK_ORIG_BEFORE_PROPERTY if before else BLANK_ORIG_AFTER_PROPERTY
+        prop_key = BLANK_PROP_BEFORE_PROPERTY if before else BLANK_PROP_AFTER_PROPERTY
+        existing = int(sty[key]) if key in sty else 0
+        sty[key] = str(existing + lines)
+        sty[orig_key] = value_str(em_value, "em")
+        sty[prop_key] = prop_name
+
+    def expand_block_margins(self, book_part):
+        for elem in list(book_part.body().iter("*")):
+            if "style" not in elem.attrib:
+                continue
+
+            sty = self.get_style(elem)
+            if BLANK_BEFORE_PROPERTY not in sty and BLANK_AFTER_PROPERTY not in sty:
+                continue
+
+            before = sty.pop(BLANK_BEFORE_PROPERTY, None)
+            after = sty.pop(BLANK_AFTER_PROPERTY, None)
+            orig_before = sty.pop(BLANK_ORIG_BEFORE_PROPERTY, None)
+            orig_after = sty.pop(BLANK_ORIG_AFTER_PROPERTY, None)
+            prop_before = sty.pop(BLANK_PROP_BEFORE_PROPERTY, None)
+            prop_after = sty.pop(BLANK_PROP_AFTER_PROPERTY, None)
+
+            if not self.can_host_blank_paragraphs(elem):
+                if orig_before is not None and prop_before is not None:
+                    sty[prop_before] = orig_before
+                if orig_after is not None and prop_after is not None:
+                    sty[prop_after] = orig_after
+                self.set_style(elem, sty)
+                continue
+
+            self.set_style(elem, sty)
+            parent = elem.getparent()
+            if parent is None:
+                continue
+
+            index = parent.index(elem)
+            if before is not None and int(before) > 0:
+                for i in range(int(before)):
+                    parent.insert(index + i, self.create_blank_paragraph())
+                index += int(before)
+
+            if after is not None and int(after) > 0:
+                for i in range(int(after)):
+                    parent.insert(index + 1 + i, self.create_blank_paragraph())
+
+    @staticmethod
+    def can_host_blank_paragraphs(elem):
+        parent = elem.getparent()
+        if parent is None or parent.tag not in {
+                "body", "div", "section", "article", "aside", "blockquote", "figure"}:
+            return False
+
+        if elem.tag not in {
+                "p", "div", "hr", "figure", "blockquote", "aside", "section", "article", "pre",
+                "h1", "h2", "h3", "h4", "h5", "h6"}:
+            return False
+
+        ancestor = elem.getparent()
+        while ancestor is not None and ancestor.tag != "body":
+            if ancestor.tag in {"table", "tr", "td", "th", "p", "span", "a", "li"}:
+                return False
+            ancestor = ancestor.getparent()
+
+        return True
+
+    @staticmethod
+    def create_blank_paragraph():
+        p = etree.Element("p")
+        etree.SubElement(p, "br")
+        return p
 
     def add_composite_and_equivalent_styles(self, elem, book_part):
         sty = self.get_style(elem)
@@ -2433,13 +2639,58 @@ class KFX_EPUB_Properties(object):
 
     def normalize_tcy_spans(self):
         for book_part in self.book_parts:
-            for span in book_part.body().iter("span"):
+            for span in list(book_part.body().iter("span")):
                 class_style = self.generated_class_style(span)
                 if class_style is None:
                     continue
 
-                if dict(class_style.items()) == {"text-combine-upright": "all"}:
+                classes = span.get("class", "").split()
+                if "tcy" not in classes and class_style.get("text-combine-upright") != "all":
+                    continue
+
+                if (class_style.get("text-combine-upright") == "all" and
+                        all(name in {"text-combine-upright", "word-break", "-webkit-word-break", "-epub-word-break"}
+                            for name in class_style.keys())):
+                    # word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
                     span.set("class", "tcy")
+                elif "tcy" not in classes:
+                    # 保留原本的樣式 class，再補上 tcy；consolidate 會據此避免合併。
+                    span.set("class", " ".join(classes + ["tcy"]))
+
+                self.split_tcy_span(span)
+
+    # 縦中横以 2 個符號為一組；KFX 有時會給出 4 個字元一組，需拆回 2+2。
+    def split_tcy_span(self, span):
+        if len(span) > 0:
+            return
+        text = span.text or ""
+        if len(text) <= 2:
+            return
+
+        parent = span.getparent()
+        if parent is None:
+            return
+
+        index = parent.index(span)
+        classes = span.get("class")
+        style = span.get("style")
+        tail = span.tail
+
+        parent.remove(span)
+        last = None
+        for offset in range(0, len(text), 2):
+            tcy_span = etree.Element("span")
+            if classes:
+                tcy_span.set("class", classes)
+            if style:
+                tcy_span.set("style", style)
+            tcy_span.text = text[offset:offset + 2]
+            parent.insert(index, tcy_span)
+            index += 1
+            last = tcy_span
+
+        if tail and last is not None:
+            last.tail = tail
 
     def normalize_fit_image_wrappers(self):
         for book_part in self.book_parts:
