@@ -112,7 +112,7 @@ MATHML_NAMESPACES = {
 RESERVED_OPF_VALUE_PREFIXES = {
     "a11y": "http://www.idpf.org/epub/vocab/package/a11y/#",
     "dcterms": "http://purl.org/dc/terms/",
-    "marc": "http://id.loc.gov/vocabulary/",
+    # marc 是 EPUB 的保留前綴，scheme="marc:relators" 不需要宣告。
     "media": "http://www.idpf.org/epub/vocab/overlays/#",
     "onix": "http://www.editeur.org/ONIX/book/codelists/current.html#",
     "rendition": "http://www.idpf.org/vocab/rendition/#",
@@ -1973,7 +1973,8 @@ class EPUB_Output(object):
             if pfx in used_prefixes:
                 used_prefixes.discard(pfx)
         prefix_items = ["%s: %s" % item for item in ebpaj_prefixes.items()]
-        prefix_items.extend(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p]) for p in sorted(list(used_prefixes))])
+        prefix_items.extend(["%s: %s" % (p, RESERVED_OPF_VALUE_PREFIXES[p])
+                             for p in sorted(list(used_prefixes)) if p in RESERVED_OPF_VALUE_PREFIXES])
         if prefix_items and not self.generate_epub2:
             package.set("prefix", "\n".join(prefix_items))
 

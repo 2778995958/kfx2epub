@@ -26,7 +26,6 @@ public partial class KfxEpub
     {
         ["a11y"] = "http://www.idpf.org/epub/vocab/package/a11y/#",
         ["dcterms"] = "http://purl.org/dc/terms/",
-        ["marc"] = "http://id.loc.gov/vocabulary/",
         ["media"] = "http://www.idpf.org/epub/vocab/overlays/#",
         ["onix"] = "http://www.editeur.org/ONIX/book/codelists/current.html#",
         ["rendition"] = "http://www.idpf.org/vocab/rendition/#",
@@ -53,7 +52,7 @@ public partial class KfxEpub
             var block = new List<string>();
             var creatorId = $"creator{i + 1:00}";
             block.Add($"<dc:creator id=\"{creatorId}\">{Escape(authors[i])}</dc:creator>");
-            usedPrefixes.Add("marc");
+            // marc 是 EPUB 的保留前綴，scheme="marc:relators" 不需要宣告。
             block.Add($"<meta refines=\"#{creatorId}\" property=\"role\" scheme=\"marc:relators\">aut</meta>");
             if (i < AuthorPronunciations.Count)
             {
