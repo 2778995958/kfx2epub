@@ -2144,6 +2144,15 @@ class KFX_EPUB_Properties(object):
             return False
         return has_border
 
+    # 負 text-indent 與同值 padding 合起來才是電書協的 h-indent，不能拆開處理。
+    def keeps_hanging_indent(self, sty):
+        match = re.fullmatch(r"-(\d+(?:\.\d+)?)em", sty.get("text-indent", "") or "")
+        if not match:
+            return False
+        writing_mode = sty.get("writing-mode", self.page_writing_mode)
+        pad_side = "padding-top" if self.is_vertical_writing_mode(writing_mode) else "padding-left"
+        return sty.get(pad_side) == match.group(1) + "em"
+
     # KFX 百分比邊距的版面基準寬度；由 10%↔4em、15%↔6em、2.5%↔1em 三組對照推得。
     KFX_LAYOUT_WIDTH_EM = 40
 
@@ -2829,7 +2838,10 @@ class KFX_EPUB_Properties(object):
                         for name, new_heritable_val in new_heritable_sty.items():
                             val = child_sty.get(name)
                             if val is not None:
-                                if val == new_heritable_val:
+                                # 負 text-indent 與同值 padding 是電書協的 h-indent 組合，
+                                # 提升到父元素會讓子元素只剩 padding，所以留在子元素上。
+                                if (val == new_heritable_val and
+                                        not (name == "text-indent" and self.keeps_hanging_indent(child_sty))):
                                     child_sty.pop(name)
                             elif sty[name] != new_heritable_val:
                                 child_sty[name] = sty[name]
