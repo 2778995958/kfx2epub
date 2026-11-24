@@ -1,6 +1,8 @@
 import collections
 import decimal
 import functools
+import io
+import json
 from lxml import etree
 import os
 import pkgutil
@@ -92,6 +94,194 @@ class StyleUsage(object):
 
 
 _utility_class_names = None
+
+
+_publisher_rules = None
+
+PUBLISHER_STRUCTURAL_CLASSES = {"main"}
+
+
+def parse_declarations(body):
+    props = {}
+    for part in body.split(";"):
+        if ":" not in part:
+            continue
+        name, _, value = part.partition(":")
+        name = re.sub(r"\s+", " ", name).strip().lower()
+        value = re.sub(r"\s+", " ", value).strip()
+        if name and value:
+            props[name] = value
+    return expand_declarations(props)
+
+
+def expand_declarations(props):
+    result = {}
+    sides = ("top", "right", "bottom", "left")
+    for name, value in props.items():
+        if name in ("margin", "padding"):
+            values = box_values(value)
+            if values is None:
+                continue
+            for side, one in zip(sides, values):
+                result["%s-%s" % (name, side)] = one
+            continue
+        if name in ("border-style", "border-width", "border-color"):
+            values = box_values(value)
+            if values is None:
+                continue
+            suffix = name.split("-", 1)[1]
+            for side, one in zip(sides, values):
+                result["border-%s-%s" % (side, suffix)] = one
+            continue
+        match = re.fullmatch(r"border(?:-(top|right|bottom|left))?", name)
+        if match:
+            prefix = "border-%s-" % match.group(1) if match.group(1) else "border-"
+            for token in value.split():
+                if token in ("solid", "dashed", "dotted", "double", "none", "hidden"):
+                    result[prefix + "style"] = token
+                elif re.fullmatch(r"[0-9.]+px", token) or token in ("thin", "medium", "thick"):
+                    result[prefix + "width"] = token
+                else:
+                    result[prefix + "color"] = token
+            continue
+        result[name] = value
+    return result
+
+
+def box_values(value):
+    parts = value.split()
+    if len(parts) == 1:
+        return [parts[0]] * 4
+    if len(parts) == 2:
+        return [parts[0], parts[1], parts[0], parts[1]]
+    if len(parts) == 3:
+        return [parts[0], parts[1], parts[2], parts[1]]
+    if len(parts) == 4:
+        return parts
+    return None
+
+
+def publisher_rules():
+    global _publisher_rules
+    if _publisher_rules is not None:
+        return _publisher_rules
+
+    rules = []
+    for filename in ("style-kadokawa.css", "style-karc.css"):
+        path = os.path.join(BUNDLED_STYLES_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        css = open(path, encoding="utf-8").read()
+        css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        css = re.sub(r"@charset[^;]*;", "", css)
+        css = re.sub(r"@import[^;]*;", "", css)
+        for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+            parts = match.group(1).split()
+            if not (2 <= len(parts) <= 3) or not parts[0].startswith(".p-"):
+                continue
+            if not parts[1].startswith("."):
+                continue
+            page_type = parts[0][1:]
+            parent = tag = class_name = None
+            if len(parts) == 2:
+                class_name = parts[1][1:]
+            elif parts[2].startswith("."):
+                parent, class_name = parts[1][1:], parts[2][1:]
+            else:
+                parent, tag = parts[1][1:], parts[2]
+            decls = parse_declarations(match.group(2))
+            if decls:
+                rules.append((page_type, parent, tag, class_name, decls, len(rules)))
+    _publisher_rules = rules
+    return rules
+
+
+def try_length(value):
+    match = re.fullmatch(r"(-?[0-9.]+)(em|rem|%|px)", (value or "").strip())
+    if not match:
+        return None
+    unit = match.group(2)
+    return (float(match.group(1)), "em" if unit == "rem" else unit)
+
+
+def font_percent(value):
+    parsed = try_length(value)
+    if parsed is None:
+        return None
+    amount, unit = parsed
+    if unit == "%":
+        return amount
+    if unit == "em":
+        return amount * 100
+    return amount / 16 * 100
+
+
+def element_font_percent(elem):
+    for class_name in (elem.get("class") or "").split():
+        match = re.fullmatch(r"font-(\d{3})per", class_name)
+        if match:
+            return int(match.group(1))
+        match = re.fullmatch(r"font-(\d+)em(\d*)", class_name)
+        if match:
+            text = match.group(1) + ("." + match.group(2) if match.group(2) else "")
+            return float(text) * 100
+    return None
+
+
+def line_height_class(value):
+    if not value:
+        return None
+    text = value.strip().lower()
+    if text == "normal":
+        return "line-height-normal"
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    if abs(number - int(number)) < 1e-9:
+        name = "line-height-%dem" % int(number)
+    else:
+        name = "line-height-" + ("%.2f" % number).replace(".", "em")
+    return name if name in utility_class_names() else None
+
+
+def font_compatible(decls, font_pct):
+    if font_pct is None:
+        return True
+    value = decls.get("font-size")
+    if value is None:
+        return True
+    candidate = font_percent(value)
+    return candidate is not None and abs(font_pct - candidate) <= 0.5
+
+
+def covers_residual(residual, candidate, font_pct):
+    ratios = []
+    for name, value in residual.items():
+        other = candidate.get(name)
+        if other is None:
+            return None
+        if name == "font-size":
+            a, b = font_percent(value), font_percent(other)
+            if a is None or b is None or abs(a - b) > 0.5:
+                return None
+            continue
+        current, reference = try_length(value), try_length(other)
+        if current and reference and current[1] == reference[1]:
+            if reference[1] == "px":
+                if abs(current[0] - reference[0]) > 1e-6:
+                    return None
+            elif reference[0] > 0:
+                ratios.append(current[0] / reference[0])
+            continue
+        if value.strip().lower() != other.strip().lower():
+            return None
+
+    if font_pct is not None and candidate.get("font-size"):
+        candidate_pct = font_percent(candidate["font-size"])
+        if candidate_pct is not None and abs(font_pct - candidate_pct) > 0.5:
+            return None
+    return ratios
 
 
 def utility_class_names():
@@ -1697,6 +1887,7 @@ class KFX_EPUB_Properties(object):
             style_class_names[style_str] = class_name
 
         style_usage = self.collect_style_usage(style_class_names)
+        self._dump_classes_debug(classes, style_usage)
         self.prune_redundant_class_styles(sorted_style_data, style_class_names, style_usage)
 
         # 記錄轉換前的樣式，供 fixed-layout 頁面直接內嵌（那些頁面不套用樣式表）。
@@ -1717,6 +1908,8 @@ class KFX_EPUB_Properties(object):
                         e.set("style", original_styles[class_name].tostring())
                         self.inventory_style(class_style)
                         continue
+
+                    self._dump_element_debug(book_part, e, class_name, class_style, class_utilities)
 
                     for utility_class in class_utilities.get(class_name, []):
                         self.add_class(e, utility_class)
@@ -1746,6 +1939,39 @@ class KFX_EPUB_Properties(object):
         for mq_classes in self.media_queries.values():
             for class_style in mq_classes.values():
                 self.inventory_style(class_style)
+
+    def _dump_element_debug(self, book_part, e, class_name, class_style, class_utilities):
+        path = os.environ.get("KFX_DUMP_ELEMS")
+        if not path:
+            return
+        row = {
+            "page": getattr(book_part, "filename", ""),
+            "tag": str(e.tag).rsplit("}", 1)[-1],
+            "text": "".join(e.itertext())[:24],
+            "kfx_class": class_name,
+            "utilities": list(class_utilities.get(class_name, [])),
+            "remaining": sorted(k for k in class_style.keys() if not k.startswith("-kfx-")),
+        }
+        with io.open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+    def _dump_classes_debug(self, classes, usage):
+        path = os.environ.get("KFX_DUMP_CLASSES")
+        if not path:
+            return
+        rows = []
+        for class_name, style in classes.items():
+            info = usage.get(class_name)
+            rows.append({
+                "class": class_name,
+                "decls": {k: v for k, v in style.items() if not k.startswith("-kfx-")},
+                "tags": sorted(info.tags) if info else [],
+                "direction": info.direction if info else None,
+                "font_px": info.font_px if info else None,
+            })
+        with io.open(path, "a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     def collect_style_usage(self, style_class_names):
         usage = {}
@@ -1833,8 +2059,11 @@ class KFX_EPUB_Properties(object):
 
             utilities.extend(self.try_map_borders(style))
 
+            image_only = info.tags == {"img"}
+            font_scale = (info.font_px if info.font_px > 0 else 16.0) / 16.0
             for name in list(style.keys()):
-                mapping = self.map_utility_property(name, style.get(name), info.direction)
+                mapping = self.map_utility_property(name, style.get(name), info.direction,
+                                                    image_only=image_only, font_scale=font_scale)
                 if mapping is None:
                     continue
                 utility_class, extra_declaration = mapping
@@ -1848,6 +2077,43 @@ class KFX_EPUB_Properties(object):
                 class_utilities[class_name] = utilities
 
         return class_utilities
+
+    def inline_remaining_generated_styles(self):
+        """還留在生成 class 裡的宣告直接寫進元素的 style，不再產生 style-kfx.css。"""
+        for book_part in self.book_parts:
+            if book_part.is_nav or book_part.is_fxl:
+                continue
+            for elem in book_part.body().iter("*"):
+                names = []
+                for name in (elem.get("class") or "").split():
+                    selector = class_selector(name)
+                    if selector not in self.css_rules and selector not in self.extra_css_rules:
+                        continue
+                    if any(key.startswith(selector + ":") for key in self.css_rules):
+                        continue
+                    names.append(name)
+                if not names:
+                    continue
+
+                merged = self.Style(elem.get("style") or "")
+                for name in names:
+                    selector = class_selector(name)
+                    if selector in self.css_rules:
+                        merged.update(self.css_rules[selector], replace=True)
+                    if selector in self.extra_css_rules:
+                        merged.update(self.Style(self.extra_css_rules[selector]), replace=True)
+                        del self.extra_css_rules[selector]
+                    self.remove_class(elem, name)
+                # 固定屬性順序（其他屬性 → class → style），讓 C# 與 Python 的輸出一致。
+                class_value = elem.get("class")
+                style_value = merged.tostring()
+                others = [(k, v) for k, v in elem.attrib.items() if k not in ("class", "style")]
+                elem.attrib.clear()
+                for key, value in others:
+                    elem.attrib[key] = value
+                if class_value is not None:
+                    elem.set("class", class_value)
+                elem.set("style", style_value)
 
     @staticmethod
     def is_one_rem_margin(value, font_px):
@@ -1991,12 +2257,12 @@ class KFX_EPUB_Properties(object):
             style.pop(name, None)
         return list(dict.fromkeys(classes))
 
-    def map_utility_property(self, name, value, direction=None):
+    def map_utility_property(self, name, value, direction=None, image_only=False, font_scale=1.0):
         """回傳 (utility class, 需補的宣告或 None)；無法對應時回傳 None。"""
         value = (value or "").lower()
 
         if name.startswith(("margin", "padding")):
-            return self.map_logical_box(name, value, direction)
+            return self.map_logical_box(name, value, direction, font_scale)
 
         if name == "text-align":
             utility_class = {"right": "align-end", "left": "align-left",
@@ -2018,7 +2284,7 @@ class KFX_EPUB_Properties(object):
             return self.map_font_size(value)
 
         if name in ("height", "width", "max-height", "max-width"):
-            return self.map_box_size(name, value)
+            return self.map_box_size(name, value, image_only)
 
         if name == "word-break":
             utility_class = {"break-all": "word-break-break-all", "keep-all": "word-break-keep-all",
@@ -2038,9 +2304,31 @@ class KFX_EPUB_Properties(object):
         # text-combine-upright 保留給 normalize_tcy_spans 判斷（會改寫成 tcy class）。
         return None
 
+    @classmethod
+    def map_logical_box(cls, name, value, direction, font_scale=1.0):
+        """邊距／內距：依頁面方向換成邏輯 class（m-start / p-after …）；行首字下げ用 start-*。
+
+        值不在電書協網格時，會再用字級比例試一次：KFX 有些長度是以元素自身字級為單位，
+        例如 1.3em 標題的 0.769231em 其實就是 1em（bw 用 start-1em）。
+        """
+        if not direction:
+            return None
+
+        mapped = cls.map_logical_box_value(name, value, direction)
+        if mapped is not None:
+            return mapped
+
+        if abs(font_scale - 1.0) < 1e-6:
+            return None
+        match = re.fullmatch(r"(\d+(?:\.\d+)?)(em|%)", value or "")
+        if not match:
+            return None
+        scaled = float(match.group(1)) * font_scale
+        scaled_text = ("%.4f" % scaled).rstrip("0").rstrip(".") + match.group(2)
+        return cls.map_logical_box_value(name, scaled_text, direction)
+
     @staticmethod
-    def map_logical_box(name, value, direction):
-        """邊距／內距：依頁面方向換成邏輯 class（m-start / p-after …）；行首字下げ用 start-*。"""
+    def map_logical_box_value(name, value, direction):
         if not direction:
             return None
 
@@ -2093,10 +2381,10 @@ class KFX_EPUB_Properties(object):
             return None
         digits = "%03d" % int(percent)
         class_name = "font-%sper" % digits
-        extra = None if digits in UTILITY_FONT_PERCENTS else "font-size: %d%%" % int(percent)
+        extra = None if class_name in utility_class_names() else "font-size: %d%%" % int(percent)
         return class_name, extra
 
-    def map_box_size(self, name, value):
+    def map_box_size(self, name, value, image_only=False):
         if value == "auto" and name in ("height", "width"):
             return name + "-auto", None
         if value == "none" and name in ("max-height", "max-width"):
@@ -2111,9 +2399,15 @@ class KFX_EPUB_Properties(object):
             magnitude = round(magnitude, 4)
             if magnitude != int(magnitude):
                 return None
+            # 圖片寬度百分比在 KFX 是相對 40em 版面的；電書協用 em 表示同一件事。
+            if image_only and name == "width" and magnitude < 100:
+                em_name = self.em_size_name(float(magnitude) * self.KFX_LAYOUT_WIDTH_EM / 100.0)
+                if ("width-" + em_name) in utility_class_names():
+                    return "width-" + em_name, None
+
             digits = "%03d" % int(magnitude)
             class_name = "%s-%sper" % (name, digits)
-            extra = None if digits in UTILITY_BOX_PERCENTS else "%s: %d%%" % (name, int(magnitude))
+            extra = None if class_name in utility_class_names() else "%s: %d%%" % (name, int(magnitude))
             return class_name, extra
 
         em_name = self.em_size_name(magnitude)
@@ -3369,6 +3663,115 @@ class KFX_EPUB_Properties(object):
             elem.set("class", " ".join(classes))
         else:
             elem.attrib.pop("class", None)
+
+    def apply_publisher_class_mapping(self):
+        """把奥付／扉上還沒對應的列換成 author／label 等出版社語意 class。"""
+        rules = publisher_rules()
+        if not rules or not self.uses_publisher_css():
+            return
+
+        for book_part in self.book_parts:
+            if book_part.is_nav or book_part.is_fxl:
+                continue
+            body = book_part.body()
+            page_type = self.page_type_class(body)
+            if page_type is None:
+                continue
+
+            used = set()
+            mapped_parents = []
+            # publisher class 在樣式表裡是固定順序，和頁面上的區塊順序一致。
+            # 依序掃描區塊、只在順序往後推進時取用；沒有殘餘宣告的區塊也推進游標。
+            container = next((e for e in body.iter("*") if "main" in (e.get("class") or "").split()), body)
+            blocks = list(container)
+            block_fonts = [None] * len(blocks)
+            block_rules = [None] * len(blocks)
+
+            cursor = -1
+            for index, block in enumerate(blocks):
+                generated = self.generated_class_name(block)
+                residual = self.css_rules.get(class_selector(generated)) if generated else None
+                font_pct = element_font_percent(block)
+                block_fonts[index] = font_pct
+
+                chosen = None
+                for page, parent, tag, class_name, decls, order in rules:
+                    if page != page_type or parent is not None or class_name is None:
+                        continue
+                    if order <= cursor:
+                        continue
+                    if class_name in PUBLISHER_STRUCTURAL_CLASSES or class_name in used:
+                        continue
+                    if not font_compatible(decls, font_pct):
+                        continue
+                    if residual:
+                        ratios = covers_residual(residual, decls, font_pct)
+                        if not ratios or max(ratios) - min(ratios) > 1e-3:
+                            continue
+                    chosen = (class_name, order, decls)
+                    break
+
+                if chosen is None:
+                    continue
+                class_name, cursor, decls = chosen
+                if not residual:
+                    continue
+                block_rules[index] = decls
+                self.add_class(block, class_name)
+                self.remove_class(block, generated)
+                used.add(class_name)
+                mapped_parents.append((block, class_name))
+
+            # 出版社樣式把同一組的後續行包在一個 div 裡，讓它們繼承 line-height（多為 1.0）。
+            # 我們的結構是平鋪的，所以直接把同樣的行高套在後續同字級的區塊上。
+            for index in range(len(blocks)):
+                decls = block_rules[index]
+                if decls is None:
+                    continue
+                line_height = line_height_class(decls.get("line-height"))
+                if line_height is None:
+                    continue
+                for other in range(index + 1, len(blocks)):
+                    if block_rules[other] is not None:
+                        break
+                    if block_fonts[other] != block_fonts[index]:
+                        break
+                    self.add_class(blocks[other], line_height)
+
+            for parent_elem, class_name in mapped_parents:
+                for child in parent_elem.iterdescendants():
+                    generated = self.generated_class_name(child)
+                    if generated is None:
+                        continue
+                    residual = self.css_rules.get(class_selector(generated))
+                    if residual is None:
+                        continue
+                    for page, parent, tag, child_class, decls, _order in rules:
+                        if page != page_type or parent != class_name:
+                            continue
+                        if tag is not None and tag != str(child.tag).rsplit("}", 1)[-1]:
+                            continue
+                        ratios = covers_residual(residual, decls, element_font_percent(child))
+                        if not ratios or max(ratios) - min(ratios) > 1e-3:
+                            continue
+                        if child_class is not None and child_class not in used:
+                            self.add_class(child, child_class)
+                            used.add(child_class)
+                        self.remove_class(child, generated)
+                        break
+
+    @staticmethod
+    def page_type_class(body):
+        for name in (body.get("class") or "").split():
+            if name in ("p-colophon", "p-colophon2", "p-titlepage"):
+                return name
+        return None
+
+    def generated_class_name(self, elem):
+        for name in (elem.get("class") or "").split():
+            if class_selector(name) in self.css_rules:
+                return name
+        return None
 
     def create_css_files(self):
         self.prune_unused_css_rules()
