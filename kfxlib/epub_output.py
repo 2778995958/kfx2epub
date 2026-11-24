@@ -516,6 +516,8 @@ class EPUB_Output(object):
             self.rename_spine_book_parts()
 
         self.apply_page_type_classes()
+        self.apply_publisher_class_mapping()
+        self.inline_remaining_generated_styles()
 
         if self.fixed_layout and (self.original_height is None or self.original_width is None) and (self.is_comic or self.is_children):
             self.compare_fixed_layout_viewports()

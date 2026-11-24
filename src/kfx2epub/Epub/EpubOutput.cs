@@ -398,6 +398,8 @@ public partial class KfxEpub
         }
 
         ApplyPageTypeClasses();
+        ApplyPublisherClassMapping();
+        InlineRemainingGeneratedStyles();
 
         if (FixedLayout && (OriginalHeight is null || OriginalWidth is null) && (IsComic || IsChildren))
         {
@@ -997,6 +999,52 @@ public partial class KfxEpub
         if (bookPart.Filename == TocFilepath && !body.Has("class")) body.Set("class", "p-toc");
         else if (bookPart.Filename == ColophonFilepath && !body.Has("class")) body.Set("class", "p-colophon");
         else if (!body.Has("class")) body.Set("class", "p-text");
+    }
+
+    // 最後還留在生成 class 裡的宣告，直接寫進元素的 style；
+    // 這樣就不會再產生 style-kfx.css，也不用靠 class 名稱去引用。
+    // 有 ::first-line 等選擇器附掛規則的 class 例外保留。
+    public void InlineRemainingGeneratedStyles()
+    {
+        foreach (var bookPart in BookParts)
+        {
+            if (bookPart.IsNav || bookPart.IsFxl) continue;
+            foreach (var elem in bookPart.Body().DescendantsAndSelf())
+            {
+                var classNames = (elem.Get("class", "") ?? "")
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Where(c => CssRules.ContainsKey(ClassSelector(c)) || ExtraCssRules.ContainsKey(ClassSelector(c)))
+                    .Where(c => !CssRules.Keys.Any(k => k.StartsWith(ClassSelector(c) + ":", StringComparison.Ordinal)))
+                    .ToList();
+                if (classNames.Count == 0) continue;
+
+                var merged = new Style(elem.Get("style", ""));
+                foreach (var className in classNames)
+                {
+                    var selector = ClassSelector(className);
+                    if (CssRules.TryGetValue(selector, out var rule)) merged.Update(rule, replace: true);
+                    if (ExtraCssRules.TryGetValue(selector, out var extra))
+                    {
+                        merged.Update(new Style(extra), replace: true);
+                        ExtraCssRules.Remove(selector);
+                    }
+
+                    RemoveClass(elem, className);
+                }
+
+                // 固定屬性順序（其他屬性 → class → style），讓 C# 與 Python 的輸出一致。
+                // Dictionary 在移除後重新加入時會重用空位，所以這裡直接重建。
+                var classValue = elem.Get("class");
+                var styleValue = merged.ToString();
+                var others = elem.Attributes
+                    .Where(pair => pair.Key is not ("class" or "style"))
+                    .ToList();
+                elem.Attributes.Clear();
+                foreach (var (key, value) in others) elem.Attributes[key] = value;
+                if (classValue is not null) elem.Set("class", classValue);
+                elem.Set("style", styleValue);
+            }
+        }
     }
 
     // 在產生 CSS 之前先補上頁型 class，讓出版社 CSS（style-kadokawa.css 等）能命中，

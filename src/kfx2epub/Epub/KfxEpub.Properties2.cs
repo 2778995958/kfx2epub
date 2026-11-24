@@ -403,10 +403,14 @@ public partial class KfxEpub
                 (utilities ??= new List<string>()).AddRange(borderClasses);
             }
 
+            var imageOnly = info.Tags.Count == 1 && info.Tags.Contains("img");
+            var fontScale = (info.FontPx > 0 ? info.FontPx : 16.0) / 16.0;
             foreach (var name in style.Properties.Keys.ToList())
             {
-                var mapped = TryMapUtilityProperty(name, style.Get(name), info.Direction, out var mapping);
-                if (!mapped) continue;                (utilities ??= new List<string>()).Add(mapping.ClassName);
+                var mapped = TryMapUtilityProperty(name, style.Get(name), info.Direction, imageOnly, fontScale,
+                    out var mapping);
+                if (!mapped) continue;
+                (utilities ??= new List<string>()).Add(mapping.ClassName);
                 style.Pop(name);
                 if (mapping.ExtraDeclaration is not null && !ExtraCssRules.ContainsKey(ClassSelector(mapping.ClassName)))
                 {
@@ -571,14 +575,15 @@ public partial class KfxEpub
         return true;
     }
 
-    private static bool TryMapUtilityProperty(string name, string value, string direction, out UtilityMapping mapping)
+    private static bool TryMapUtilityProperty(string name, string value, string direction, bool imageOnly,
+        double fontScale, out UtilityMapping mapping)
     {
         mapping = null;
         var lower = (value ?? "").ToLowerInvariant();
 
         if (name.StartsWith("margin", StringComparison.Ordinal) || name.StartsWith("padding", StringComparison.Ordinal))
         {
-            return TryMapLogicalBox(name, lower, direction, out mapping);
+            return TryMapLogicalBox(name, lower, direction, fontScale, out mapping);
         }
 
         switch (name)
@@ -611,7 +616,7 @@ public partial class KfxEpub
             case "width":
             case "max-height":
             case "max-width":
-                return TryMapBoxSize(name, lower, out mapping);
+                return TryMapBoxSize(name, lower, imageOnly, out mapping);
 
             case "word-break":
                 var wordBreak = lower switch
@@ -668,11 +673,11 @@ public partial class KfxEpub
         var digits = ((int)percent).ToString("000");
         var className = "font-" + digits + "per";
         mapping = new UtilityMapping(className,
-            UtilityFontPercents.Contains(digits) ? null : "font-size: " + (int)percent + "%");
+            UtilityClassNames.Contains(className) ? null : "font-size: " + (int)percent + "%");
         return true;
     }
 
-    private static bool TryMapBoxSize(string name, string value, out UtilityMapping mapping)
+    private static bool TryMapBoxSize(string name, string value, bool imageOnly, out UtilityMapping mapping)
     {
         mapping = null;
         if (value == "auto" && name is "height" or "width")
@@ -694,10 +699,23 @@ public partial class KfxEpub
         if (match.Groups[2].Value == "%")
         {
             if (magnitude != decimal.Truncate(magnitude)) return false;
+
+            // 圖片寬度百分比在 KFX 是相對 40em 版面的；電書協用 em 表示同一件事。
+            if (imageOnly && name == "width" && magnitude < 100)
+            {
+                var derivedName = EmSizeName(magnitude * 40 / 100);
+                var emClass = "width-" + derivedName;
+                if (UtilityClassNames.Contains(emClass))
+                {
+                    mapping = new UtilityMapping(emClass);
+                    return true;
+                }
+            }
+
             var digits = ((int)magnitude).ToString("000");
             var className = name + "-" + digits + "per";
             mapping = new UtilityMapping(className,
-                UtilityBoxPercents.Contains(digits) ? null : name + ": " + (int)magnitude + "%");
+                UtilityClassNames.Contains(className) ? null : name + ": " + (int)magnitude + "%");
             return true;
         }
 
@@ -734,10 +752,24 @@ public partial class KfxEpub
     }
 
     // 邊距／內距：依頁面方向換成邏輯 class（m-start / p-after …）；行首字下げ用 start-*。
-    private static bool TryMapLogicalBox(string name, string value, string direction, out UtilityMapping mapping)
+    // 值若不在電書協網格，會再用字級比例試一次：KFX 有些長度是以元素自身字級為單位，
+    // 例如 1.3em 標題的 0.769231em 其實就是 1em（bw 用 start-1em）。
+    private static bool TryMapLogicalBox(string name, string value, string direction, double fontScale,
+        out UtilityMapping mapping)
     {
         mapping = null;
         if (direction is null) return false;
+
+        if (TryMapLogicalBoxValue(name, value, direction, out mapping)) return true;
+        if (Math.Abs(fontScale - 1) < 1e-6) return false;
+
+        var scaled = ScaleBoxValue(value, fontScale);
+        return scaled is not null && TryMapLogicalBoxValue(name, scaled, direction, out mapping);
+    }
+
+    private static bool TryMapLogicalBoxValue(string name, string value, string direction, out UtilityMapping mapping)
+    {
+        mapping = null;
 
         if (name is "margin" or "padding")
         {
@@ -775,6 +807,16 @@ public partial class KfxEpub
         }
 
         return false;
+    }
+
+    // 把 "0.769231em" 乘上字級比例，回傳 "1em" 這種寫法（只在能精確落在網格時才有意義）。
+    private static string ScaleBoxValue(string value, double fontScale)
+    {
+        var match = Regex.Match(value ?? "", @"^(\d+(?:\.\d+)?)(em|%)$");
+        if (!match.Success) return null;
+        var magnitude = double.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture) * fontScale;
+        var rounded = Math.Round(magnitude, 4);
+        return rounded.ToString("0.####", CultureInfo.InvariantCulture) + match.Groups[2].Value;
     }
 
     // utility 命名：1em / 0em25 / 010per；不在網格回傳 null。
