@@ -55,7 +55,7 @@ def unique_output_file(output_path, clean_filename):
         index += 1
 
 
-def batch_convert_kfx_to_epub(input_dir, output_dir):
+def batch_convert_kfx_to_epub(input_dir, output_dir, recursive=True):
     """
     Convert a single KFX/KFX-ZIP file, or all KFX/KFX-ZIP files in a folder, to EPUB.
     Output EPUB files are named in the safe full-width '[Author] Book Title.epub' format.
@@ -79,13 +79,24 @@ def batch_convert_kfx_to_epub(input_dir, output_dir):
             print("💡 Hint: the input is a file, but it is not a .kfx or .kfx-zip file.")
             return
     else:
-        kfx_files = list(input_path.glob("*.kfx-zip")) + list(input_path.glob("*.kfx"))
+        if recursive:
+            kfx_files = list(input_path.rglob("*.kfx-zip")) + list(input_path.rglob("*.kfx"))
+        else:
+            kfx_files = list(input_path.glob("*.kfx-zip")) + list(input_path.glob("*.kfx"))
 
     if not kfx_files:
-        print("💡 Hint: no .kfx-zip or .kfx files were found.")
+        if recursive:
+            print("💡 Hint: no .kfx-zip or .kfx files were found (including subfolders).")
+        else:
+            print("💡 Hint: no .kfx-zip or .kfx files were found (top level only).")
+            print("   Drag a folder onto the script or pass a folder path to include subfolders.")
         return
 
-    print(f"🔍 Found {len(kfx_files)} file(s). Starting conversion...\n")
+    print(
+        f"🔍 Found {len(kfx_files)} file(s)"
+        f"{' (including subfolders)' if recursive else ' (top level only)'}. "
+        f"Starting conversion...\n"
+    )
     print("-" * 50)
 
     success_count = 0
@@ -148,8 +159,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "input_dir",
         nargs="?",
-        default=str(script_dir / "archived_kfx"),
-        help="Input folder, or a single .kfx / .kfx-zip file. Defaults to archived_kfx next to this script.",
+        default=None,
+        help=(
+            "Input folder, or a single .kfx / .kfx-zip file. Defaults to archived_kfx next "
+            "to this script (top level only). A folder passed here or dragged onto the "
+            "script is searched recursively."
+        ),
     )
 
     parser.add_argument(
@@ -160,4 +175,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    batch_convert_kfx_to_epub(args.input_dir, args.output_dir)
+    recursive = args.input_dir is not None
+    input_dir = args.input_dir if recursive else str(script_dir / "archived_kfx")
+    batch_convert_kfx_to_epub(input_dir, args.output_dir, recursive=recursive)

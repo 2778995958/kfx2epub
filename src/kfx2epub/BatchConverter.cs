@@ -17,10 +17,11 @@ public static class BatchConverter
         return Math.Max(1, Environment.ProcessorCount / 2);
     }
 
-    public static int Run(string input, string output, int workers = 0)
+    public static int Run(string input, string output, int workers = 0, bool recursive = true)
     {
         var inputPath = Path.GetFullPath(input);
         var outputPath = Path.GetFullPath(output);
+        var directoryInput = !File.Exists(inputPath);
 
         Console.WriteLine($"📂 輸入路徑：{inputPath}");
         Console.WriteLine($"📂 輸出路徑：{outputPath}");
@@ -47,24 +48,42 @@ public static class BatchConverter
         }
         else
         {
-            files = Directory.EnumerateFiles(inputPath, "*.kfx-zip", SearchOption.TopDirectoryOnly)
-                .Concat(Directory.EnumerateFiles(inputPath, "*.kfx", SearchOption.TopDirectoryOnly))
+            var options = new EnumerationOptions
+            {
+                RecurseSubdirectories = recursive,
+                IgnoreInaccessible = true
+            };
+            files = Directory.EnumerateFiles(inputPath, "*", options)
+                .Where(f => Path.GetExtension(f).ToLowerInvariant() is ".kfx" or ".kfx-zip")
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                 .ToList();
         }
 
         if (files.Count == 0)
         {
-            Console.WriteLine("💡 提示：沒有找到 .kfx-zip 或 .kfx 檔案。");
+            Console.WriteLine(recursive
+                ? "💡 提示：沒有找到 .kfx-zip 或 .kfx 檔案（含子資料夾）。"
+                : "💡 提示：沒有找到 .kfx-zip 或 .kfx 檔案（只搜尋最上層）。");
+
+            if (!recursive)
+            {
+                Console.WriteLine("   把資料夾拖曳到程式上，或指定資料夾路徑，就會一併搜尋子資料夾。");
+            }
+
             return 1;
         }
 
         if (workers <= 0) workers = DefaultWorkers();
         workers = Math.Clamp(workers, 1, files.Count);
 
-        Console.WriteLine(workers > 1
-            ? $"🔍 找到 {files.Count} 個檔案，開始轉換（平行工作者：{workers}）..."
-            : $"🔍 找到 {files.Count} 個檔案，開始轉換...");
+        var scope = recursive ? "含子資料夾" : "僅最上層";
+        Console.WriteLine(directoryInput
+            ? workers > 1
+                ? $"🔍 找到 {files.Count} 個檔案，開始轉換（平行工作者：{workers}，{scope}）..."
+                : $"🔍 找到 {files.Count} 個檔案，開始轉換（{scope}）..."
+            : workers > 1
+                ? $"🔍 找到 {files.Count} 個檔案，開始轉換（平行工作者：{workers}）..."
+                : $"🔍 找到 {files.Count} 個檔案，開始轉換...");
         Console.WriteLine(new string('-', 50));
 
         var allocator = new OutputAllocator(outputPath);
@@ -94,6 +113,7 @@ public static class BatchConverter
         Console.WriteLine(new string('-', 50));
         Console.WriteLine($"🎉 批次處理完成（耗時 {stopwatch.Elapsed.TotalSeconds:0.0} 秒，工作者：{workers}）。");
         Console.WriteLine($"📊 結果：成功 {success}，失敗 {failed}");
+        Console.WriteLine($"📂 輸出資料夾：{outputPath}");
         return failed == 0 ? 0 : 1;
     }
 
