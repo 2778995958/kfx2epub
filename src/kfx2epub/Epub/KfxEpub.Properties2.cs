@@ -255,6 +255,23 @@ public partial class KfxEpub
         UpdateVerticalRlClassUsage();
     }
 
+    private static readonly Dictionary<string, string> UtilityBackgroundColors = new(StringComparer.Ordinal)
+    {
+        ["#000000"] = "bg-black", ["black"] = "bg-black",
+        ["#696969"] = "bg-dimgray", ["dimgray"] = "bg-dimgray",
+        ["#808080"] = "bg-gray", ["gray"] = "bg-gray", ["grey"] = "bg-gray",
+        ["#a9a9a9"] = "bg-darkgray", ["darkgray"] = "bg-darkgray", ["darkgrey"] = "bg-darkgray",
+        ["#c0c0c0"] = "bg-silver", ["silver"] = "bg-silver",
+        ["#dcdcdc"] = "bg-gainsboro", ["gainsboro"] = "bg-gainsboro",
+        ["#ffffff"] = "bg-white", ["white"] = "bg-white",
+        ["transparent"] = "bg-transparent",
+        ["#ff0000"] = "bg-red", ["red"] = "bg-red",
+        ["#0000ff"] = "bg-blue", ["blue"] = "bg-blue",
+        ["#00ffff"] = "bg-cyan", ["cyan"] = "bg-cyan", ["aqua"] = "bg-cyan",
+        ["#ff00ff"] = "bg-magenta", ["magenta"] = "bg-magenta", ["fuchsia"] = "bg-magenta",
+        ["#ff4500"] = "bg-orangered", ["orangered"] = "bg-orangered"
+    };
+
     // 電書協樣式表中實際存在的 utility class（字級百分比、寬高尺寸）。
     private static readonly HashSet<string> UtilityFontPercents = new(StringComparer.Ordinal)
     {
@@ -532,8 +549,12 @@ public partial class KfxEpub
         classes = null;
         var sides = new[] { "top", "right", "bottom", "left" };
         var styles = sides.ToDictionary(s => s, s => style.Get($"border-{s}-style"));
-        var width = style.Get("border-width") ?? style.Get("border-top-width");
-        var color = style.Get("border-color") ?? style.Get("border-top-color");
+        var widths = sides.Select(s => style.Get($"border-{s}-width"))
+            .Append(style.Get("border-width")).Where(v => v is not null).Distinct().ToList();
+        var colors = sides.Select(s => style.Get($"border-{s}-color"))
+            .Append(style.Get("border-color")).Where(v => v is not null).Distinct().ToList();
+        var width = widths.Count == 0 ? null : widths[0];
+        var color = colors.Count == 0 ? null : colors[0];
 
         var shorthand = style.Get("border-style");
         if (shorthand is not null)
@@ -549,12 +570,20 @@ public partial class KfxEpub
             if (expanded is null) return false;
             for (var i = 0; i < 4; i++) styles[sides[i]] = expanded[i];
         }
-        else if (styles.Values.Any(v => v is null)) return false;
+        else
+        {
+            // 沒有 border-style 簡寫時，缺的邊就是 CSS 初始值 none。
+            if (styles.Values.All(v => v is null)) return false;
+            foreach (var side in sides)
+            {
+                if (styles[side] is null) styles[side] = "none";
+            }
+        }
 
         var solid = sides.Where(s => styles[s] == "solid").ToList();
         if (sides.Any(s => styles[s] is not ("solid" or "none"))) return false;
-        if (width is not null && width != "1px") return false;
-        if (color is not null && color is not ("black" or "#000000" or "#000")) return false;
+        if (widths.Count > 1 || (width is not null && width != "1px")) return false;
+        if (colors.Count > 1 || (color is not null && color is not ("black" or "#000000" or "#000"))) return false;
 
         var list = new List<string>();
         if (solid.Count == 4) list.Add("k-solid");
@@ -603,7 +632,14 @@ public partial class KfxEpub
         switch (name)
         {
             case "text-indent":
-                // 正的整數 em 行首縮排對應電書協 .indent-Nem；負值由 TryMapHangingIndent 處理。
+                // 正的整數 em 行首縮排對應電書協 .indent-Nem；0 對應 .indent-0；
+                // 負值由 TryMapHangingIndent 處理。
+                if (lower == "0")
+                {
+                    mapping = new UtilityMapping("indent-0");
+                    return true;
+                }
+
                 var indentMatch = Regex.Match(lower, @"^(\d+)em$");
                 if (!indentMatch.Success) return false;
                 var indentEm = int.Parse(indentMatch.Groups[1].Value, CultureInfo.InvariantCulture);
@@ -611,6 +647,57 @@ public partial class KfxEpub
                 var indentClass = $"indent-{indentEm}em";
                 if (!UtilityClassNames.Contains(indentClass)) return false;
                 mapping = new UtilityMapping(indentClass);
+                return true;
+
+            case "font-style":
+                var fontStyle = lower switch { "italic" => "italic", "normal" => "font-style-normal", _ => null };
+                if (fontStyle is null) return false;
+                mapping = new UtilityMapping(fontStyle);
+                return true;
+
+            case "vertical-align":
+                var valign = lower switch
+                {
+                    "baseline" => "valign-baseline", "bottom" => "valign-bottom", "inherit" => "valign-inherit",
+                    "middle" => "valign-middle", "sub" => "valign-sub", "super" => "valign-super",
+                    "text-bottom" => "valign-text-bottom", "text-top" => "valign-text-top", "top" => "valign-top",
+                    _ => null
+                };
+                if (valign is null) return false;
+                mapping = new UtilityMapping(valign);
+                return true;
+
+            case "display":
+                var display = lower switch
+                {
+                    "block" => "display-block", "inline" => "display-inline",
+                    "inline-block" => "display-inline-block", "none" => "display-none", _ => null
+                };
+                if (display is null) return false;
+                mapping = new UtilityMapping(display);
+                return true;
+
+            case "float":
+                var floatClass = lower switch
+                {
+                    "left" => "float-left", "right" => "float-right", "none" => "float-none", _ => null
+                };
+                if (floatClass is null) return false;
+                mapping = new UtilityMapping(floatClass);
+                return true;
+
+            case "background-color":
+                if (!UtilityBackgroundColors.TryGetValue(lower, out var backgroundClass)) return false;
+                mapping = new UtilityMapping(backgroundClass);
+                return true;
+
+            case "letter-spacing":
+                var spacingMatch = Regex.Match(lower, @"^(\d+(?:\.\d+)?)em$");
+                if (!spacingMatch.Success) return false;
+                var spacing = decimal.Parse(spacingMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+                var spacingClass = "lspacing-" + EmSizeName(spacing);
+                if (!UtilityClassNames.Contains(spacingClass)) return false;
+                mapping = new UtilityMapping(spacingClass);
                 return true;
 
             case "text-align":
@@ -668,7 +755,15 @@ public partial class KfxEpub
                 return false;
 
             case "text-emphasis-style":
-                var emphasis = lower switch { "filled sesame" => "em-sesame", "open sesame" => "em-sesame-open", _ => null };
+                var emphasis = lower switch
+                {
+                    "filled dot" => "em-dot", "open dot" => "em-dot-open",
+                    "filled circle" => "em-circle", "open circle" => "em-circle-open",
+                    "filled double-circle" => "em-double-circle", "open double-circle" => "em-double-circle-open",
+                    "filled triangle" => "em-triangle", "open triangle" => "em-triangle-open",
+                    "filled sesame" => "em-sesame", "open sesame" => "em-sesame-open",
+                    _ => null
+                };
                 if (emphasis is null) return false;
                 mapping = new UtilityMapping(emphasis);
                 return true;

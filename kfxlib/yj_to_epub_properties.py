@@ -327,6 +327,22 @@ UTILITY_BOX_PERCENTS = {
     "080", "090", "100",
     }
 
+UTILITY_BACKGROUND_COLORS = {
+    "#000000": "bg-black", "black": "bg-black",
+    "#696969": "bg-dimgray", "dimgray": "bg-dimgray",
+    "#808080": "bg-gray", "gray": "bg-gray", "grey": "bg-gray",
+    "#a9a9a9": "bg-darkgray", "darkgray": "bg-darkgray", "darkgrey": "bg-darkgray",
+    "#c0c0c0": "bg-silver", "silver": "bg-silver",
+    "#dcdcdc": "bg-gainsboro", "gainsboro": "bg-gainsboro",
+    "#ffffff": "bg-white", "white": "bg-white",
+    "transparent": "bg-transparent",
+    "#ff0000": "bg-red", "red": "bg-red",
+    "#0000ff": "bg-blue", "blue": "bg-blue",
+    "#00ffff": "bg-cyan", "cyan": "bg-cyan", "aqua": "bg-cyan",
+    "#ff00ff": "bg-magenta", "magenta": "bg-magenta", "fuchsia": "bg-magenta",
+    "#ff4500": "bg-orangered", "orangered": "bg-orangered",
+    }
+
 UTILITY_BOX_EM_SIZES = {
     "0em25", "0em50", "0em75", "1em", "1em25", "1em50", "1em75", "2em", "2em50",
     "3em", "4em", "5em", "5em25", "6em", "7em", "8em", "8em75", "9em", "10em",
@@ -2229,8 +2245,14 @@ class KFX_EPUB_Properties(object):
         """框線：四邊 solid、單邊 solid、上下／左右 solid。"""
         sides = ["top", "right", "bottom", "left"]
         styles = {side: style.get("border-%s-style" % side) for side in sides}
-        width = style.get("border-width") or style.get("border-top-width")
-        color = style.get("border-color") or style.get("border-top-color")
+        widths = list(dict.fromkeys(
+            [style.get("border-%s-width" % side) for side in sides] + [style.get("border-width")]))
+        widths = [value for value in widths if value is not None]
+        colors = list(dict.fromkeys(
+            [style.get("border-%s-color" % side) for side in sides] + [style.get("border-color")]))
+        colors = [value for value in colors if value is not None]
+        width = widths[0] if widths else None
+        color = colors[0] if colors else None
 
         shorthand = style.get("border-style")
         if shorthand:
@@ -2245,14 +2267,19 @@ class KFX_EPUB_Properties(object):
                 return []
             for i, side in enumerate(sides):
                 styles[side] = expanded[i]
-        elif any(v is None for v in styles.values()):
-            return []
+        else:
+            # 沒有 border-style 簡寫時，缺的邊就是 CSS 初始值 none。
+            if all(value is None for value in styles.values()):
+                return []
+            for side in sides:
+                if styles[side] is None:
+                    styles[side] = "none"
 
         if any(v not in ("solid", "none") for v in styles.values()):
             return []
-        if width is not None and width != "1px":
+        if len(widths) > 1 or (width is not None and width != "1px"):
             return []
-        if color is not None and color not in ("black", "#000000", "#000"):
+        if len(colors) > 1 or (color is not None and color not in ("black", "#000000", "#000")):
             return []
 
         solid = [side for side in sides if styles[side] == "solid"]
@@ -2291,7 +2318,11 @@ class KFX_EPUB_Properties(object):
             return self.map_logical_box(name, value, direction, font_scale)
 
         if name == "text-indent":
-            # 正的整數 em 行首縮排對應電書協 .indent-Nem；負值由 try_map_hanging_indent 處理。
+            # 正的整數 em 行首縮排對應電書協 .indent-Nem；0 對應 .indent-0；
+            # 負值由 try_map_hanging_indent 處理。
+            if value == "0":
+                return ("indent-0", None)
+
             match = re.fullmatch(r"(\d+)em", value)
             if match is None:
                 return None
@@ -2302,6 +2333,43 @@ class KFX_EPUB_Properties(object):
             if class_name not in utility_class_names():
                 return None
             return (class_name, None)
+
+        if name == "font-style":
+            utility_class = {"italic": "italic", "normal": "font-style-normal"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "vertical-align":
+            utility_class = {
+                "baseline": "valign-baseline", "bottom": "valign-bottom",
+                "inherit": "valign-inherit", "middle": "valign-middle",
+                "sub": "valign-sub", "super": "valign-super",
+                "text-bottom": "valign-text-bottom", "text-top": "valign-text-top",
+                "top": "valign-top",
+            }.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "display":
+            utility_class = {
+                "block": "display-block", "inline": "display-inline",
+                "inline-block": "display-inline-block", "none": "display-none",
+            }.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "float":
+            utility_class = {"left": "float-left", "right": "float-right",
+                             "none": "float-none"}.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "background-color":
+            utility_class = UTILITY_BACKGROUND_COLORS.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "letter-spacing":
+            match = re.fullmatch(r"(\d+(?:\.\d+)?)em", value)
+            if match is None:
+                return None
+            class_name = "lspacing-" + self.em_size_name(float(match.group(1)))
+            return (class_name, None) if class_name in utility_class_names() else None
 
         if name == "text-align":
             utility_class = {"right": "align-end", "left": "align-left",
@@ -2337,7 +2405,13 @@ class KFX_EPUB_Properties(object):
             return (value, None) if value in ("sideways", "upright") else None
 
         if name == "text-emphasis-style":
-            utility_class = {"filled sesame": "em-sesame", "open sesame": "em-sesame-open"}.get(value)
+            utility_class = {
+                "filled dot": "em-dot", "open dot": "em-dot-open",
+                "filled circle": "em-circle", "open circle": "em-circle-open",
+                "filled double-circle": "em-double-circle", "open double-circle": "em-double-circle-open",
+                "filled triangle": "em-triangle", "open triangle": "em-triangle-open",
+                "filled sesame": "em-sesame", "open sesame": "em-sesame-open",
+            }.get(value)
             return (utility_class, None) if utility_class else None
 
         # text-combine-upright 保留給 normalize_tcy_spans 判斷（會改寫成 tcy class）。
