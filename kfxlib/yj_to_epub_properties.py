@@ -168,10 +168,11 @@ def publisher_rules():
 
     rules = []
     for filename in ("style-kadokawa.css", "style-karc.css"):
-        path = os.path.join(BUNDLED_STYLES_DIR, filename)
-        if not os.path.exists(path):
+        # calibre 外掛是 zip 匯入，磁碟上沒有 styles/；交給 read_bundled_style 處理。
+        try:
+            css = read_bundled_style(filename).decode("utf-8")
+        except (IOError, OSError):
             continue
-        css = open(path, encoding="utf-8").read()
         css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
         css = re.sub(r"@charset[^;]*;", "", css)
         css = re.sub(r"@import[^;]*;", "", css)
@@ -289,8 +290,8 @@ def utility_class_names():
     if _utility_class_names is None:
         names = set()
         for filename in ("style-standard.css", "style-advance.css"):
-            path = os.path.join(BUNDLED_STYLES_DIR, filename)
-            css = re.sub(r"/\*.*?\*/", "", open(path, encoding="utf-8").read(), flags=re.S)
+            # calibre 外掛是 zip 匯入，磁碟上沒有 styles/；交給 read_bundled_style 處理。
+            css = re.sub(r"/\*.*?\*/", "", read_bundled_style(filename).decode("utf-8"), flags=re.S)
             names.update(re.findall(r"\.([A-Za-z][\w-]*)", css))
         _utility_class_names = names
     return _utility_class_names
