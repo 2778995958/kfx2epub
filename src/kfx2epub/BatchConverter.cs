@@ -206,6 +206,7 @@ public static class BatchConverter
         }
 
         FileInfo outputFile = null;
+        EpubDiagnostics.BeginBook(file);
         try
         {
             var book = new YjBook(file);
@@ -214,6 +215,7 @@ public static class BatchConverter
 
             var title = string.IsNullOrEmpty(converter.Title) ? "Unknown" : converter.Title;
             var author = converter.Authors.Count > 0 ? converter.Authors[0] : "Unknown";
+            EpubDiagnostics.SetBookInfo(title, author);
             var cleanFilename = NameUtil.SanitizeFilename($"[{author}] {title}") + ".epub";
             outputFile = allocator.Allocate(cleanFilename);
 
@@ -223,6 +225,7 @@ public static class BatchConverter
             if (data is not { Length: > 0 })
             {
                 allocator.Release(outputFile);
+                EpubDiagnostics.EndBook(null, "轉換失敗：產生的 EPUB 資料為空。");
                 return new ConversionResult(index, total, sourceName, false, null,
                     "轉換失敗：產生的 EPUB 資料為空。", stopwatch.Elapsed, null);
             }
@@ -233,12 +236,14 @@ public static class BatchConverter
             var outputName = outputFile.Directory!.Name.StartsWith("dupname", StringComparison.Ordinal)
                 ? $"{outputFile.Directory.Name}/{outputFile.Name}"
                 : outputFile.Name;
+            EpubDiagnostics.EndBook(outputName, null);
             return new ConversionResult(index, total, sourceName, true, outputName, null,
                 stopwatch.Elapsed, null);
         }
         catch (Exception ex)
         {
             if (outputFile is not null) allocator.Release(outputFile);
+            EpubDiagnostics.EndBook(null, ex.Message);
             return new ConversionResult(index, total, sourceName, false, null, ex.Message,
                 stopwatch.Elapsed, ex.ToString());
         }

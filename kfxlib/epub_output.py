@@ -2267,10 +2267,34 @@ class EPUB_Output(object):
         else:
             self.add_style_(elem, {"display": "none"})
 
+    # EPUB 3 的 toc nav 必須和 spine 的閱讀順序一致（epubcheck NAV-011）。
+    # KFX 的導覽順序有時把目次排在扉頁前，只在輸出 nav 時依 spine 位置穩定排序；
+    # ncx_toc 本身不改動，避免影響其他用途。
+    def reading_order_toc(self, ncx_toc):
+        if len(ncx_toc) < 2:
+            return ncx_toc
+
+        part_names = [book_part.filename for book_part in self.book_parts]
+        items = []
+        last_key = -1
+        for original, toc_entry in enumerate(ncx_toc):
+            key = None
+            if toc_entry.target:
+                filename = remove_url_fragment(toc_entry.target)
+                if filename in part_names:
+                    key = part_names.index(filename)
+            if key is None:
+                key = last_key if last_key >= 0 else 0
+            last_key = key
+            items.append((key, original, toc_entry))
+
+        items.sort(key=lambda item: (item[0], item[1]))
+        return [toc_entry for _key, _original, toc_entry in items]
+
     def create_nav_list(self, parent, ncx_toc, book_part):
         ol = etree.SubElement(parent, "ol")
 
-        for toc_entry in ncx_toc:
+        for toc_entry in self.reading_order_toc(ncx_toc):
             li = etree.SubElement(ol, "li")
             a = etree.SubElement(li, "a")
             a.text = toc_entry.title or "."

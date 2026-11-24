@@ -218,21 +218,26 @@ public partial class KfxEpub
                 if (bookPart.IsFxl && !selectorClasses.Contains(className) && !classStyle.ContainsKey("-kfx-media-query"))
                 {
                     e.Set("style", originalStyles[className].ToString());
+                    EpubDiagnostics.StyleKeptInlineEvent(bookPart.Filename, e, styleStr, className, classStyle.ToString());
                     continue;
                 }
 
-                if (classUtilities.TryGetValue(className, out var utilities))
-                {
-                    foreach (var utility in utilities) AddClass(e, utility);
-                }
+                var utilityList = classUtilities.TryGetValue(className, out var utilities)
+                    ? utilities
+                    : new List<string>();
+                foreach (var utility in utilityList) AddClass(e, utility);
 
-                if (classStyle.Count == 0 && !selectorClasses.Contains(className)) e.Pop("style");
+                var dropped = classStyle.Count == 0 && !selectorClasses.Contains(className);
+                if (dropped) e.Pop("style");
                 else
                 {
                     AddClass(e, className, before: true);
                     referencedClasses.Add(className);
                     e.Pop("style");
                 }
+
+                EpubDiagnostics.StyleToClassEvent(bookPart.Filename, e, styleStr, className, utilityList,
+                    classStyle.ToString(), dropped);
             }
         }
 
@@ -597,6 +602,17 @@ public partial class KfxEpub
 
         switch (name)
         {
+            case "text-indent":
+                // 正的整數 em 行首縮排對應電書協 .indent-Nem；負值由 TryMapHangingIndent 處理。
+                var indentMatch = Regex.Match(lower, @"^(\d+)em$");
+                if (!indentMatch.Success) return false;
+                var indentEm = int.Parse(indentMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+                if (indentEm is < 1 or > 10) return false;
+                var indentClass = $"indent-{indentEm}em";
+                if (!UtilityClassNames.Contains(indentClass)) return false;
+                mapping = new UtilityMapping(indentClass);
+                return true;
+
             case "text-align":
                 var align = lower switch
                 {

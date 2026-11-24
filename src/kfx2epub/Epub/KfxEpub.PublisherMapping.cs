@@ -218,6 +218,8 @@ public partial class KfxEpub
                 RemoveClass(block, generated);
                 used.Add(chosen.ClassName);
                 mappedParents.Add((block, chosen.ClassName));
+                EpubDiagnostics.PublisherEvent(bookPart.Filename, block, generated, chosen.ClassName,
+                    residual.ToString(), chosen.Declarations.ToString(), "block");
             }
 
             // 出版社樣式把同一組的後續行包在一個 div 裡，讓它們繼承 line-height（多為 1.0）。
@@ -234,6 +236,8 @@ public partial class KfxEpub
                     if (blockRules[j] is not null) break;
                     if (blockFonts[j] != blockFonts[i]) break;
                     AddClass(blocks[j], lineHeight);
+                    EpubDiagnostics.PublisherEvent(bookPart.Filename, blocks[j], null, lineHeight,
+                        null, rule.Declarations.ToString(), "line-height");
                 }
             }
 
@@ -262,6 +266,8 @@ public partial class KfxEpub
                         }
 
                         RemoveClass(child, generated);
+                        EpubDiagnostics.PublisherEvent(bookPart.Filename, child, generated, rule.ClassName,
+                            residual.ToString(), rule.Declarations.ToString(), "child");
                         break;
                     }
                 }

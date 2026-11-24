@@ -2079,10 +2079,18 @@ class KFX_EPUB_Properties(object):
 
         return class_utilities
 
+    def inline_remaining_on_page(self, book_part):
+        """奥付與扉頁才把殘餘宣告內聯；本文保留 class 給 style-kfx.css。"""
+        frontmatter_prefix = self.FRONTMATTER_TEXT_FILEPATH.split("%s")[0]
+        return (book_part.filename == self.COLOPHON_FILEPATH or
+                book_part.filename.startswith(frontmatter_prefix))
+
     def inline_remaining_generated_styles(self):
-        """還留在生成 class 裡的宣告直接寫進元素的 style，不再產生 style-kfx.css。"""
+        """奥付／扉頁的殘餘宣告寫進 style，本文保留生成 class 供後續比對電書協樣式。"""
         for book_part in self.book_parts:
             if book_part.is_nav or book_part.is_fxl:
+                continue
+            if not self.inline_remaining_on_page(book_part):
                 continue
             for elem in book_part.body().iter("*"):
                 names = []
@@ -2103,7 +2111,6 @@ class KFX_EPUB_Properties(object):
                         merged.update(self.css_rules[selector], replace=True)
                     if selector in self.extra_css_rules:
                         merged.update(self.Style(self.extra_css_rules[selector]), replace=True)
-                        del self.extra_css_rules[selector]
                     self.remove_class(elem, name)
                 # 固定屬性順序（其他屬性 → class → style），讓 C# 與 Python 的輸出一致。
                 class_value = elem.get("class")
@@ -2115,6 +2122,15 @@ class KFX_EPUB_Properties(object):
                 if class_value is not None:
                     elem.set("class", class_value)
                 elem.set("style", style_value)
+
+        # 同一個 utility class 可能被多個元素共用，逐一內聯後才能移除規則；
+        # 仍留在本文／nav／fixed-layout 頁面的 class 要保留給 style-kfx.css。
+        used_classes = self.used_html_classes()
+        for selector in list(self.extra_css_rules):
+            match = re.match(r"^\.([A-Za-z0-9_-]+)", selector)
+            if match is not None and match.group(1) in used_classes:
+                continue
+            del self.extra_css_rules[selector]
 
     @staticmethod
     def is_one_rem_margin(value, font_px):
@@ -2273,6 +2289,19 @@ class KFX_EPUB_Properties(object):
 
         if name.startswith(("margin", "padding")):
             return self.map_logical_box(name, value, direction, font_scale)
+
+        if name == "text-indent":
+            # 正的整數 em 行首縮排對應電書協 .indent-Nem；負值由 try_map_hanging_indent 處理。
+            match = re.fullmatch(r"(\d+)em", value)
+            if match is None:
+                return None
+            em = int(match.group(1))
+            if not 1 <= em <= 10:
+                return None
+            class_name = "indent-%dem" % em
+            if class_name not in utility_class_names():
+                return None
+            return (class_name, None)
 
         if name == "text-align":
             utility_class = {"right": "align-end", "left": "align-left",
@@ -3467,12 +3496,14 @@ class KFX_EPUB_Properties(object):
 
     def normalize_tcy_spans(self):
         for book_part in self.book_parts:
-            for span in list(book_part.body().iter("span")):
-                class_style = self.generated_class_style(span)
+            body = book_part.body()
+            candidates = list(body.iter("span")) + list(body.iter("rb"))
+            for elem in candidates:
+                class_style = self.generated_class_style(elem)
                 if class_style is None:
                     continue
 
-                classes = span.get("class", "").split()
+                classes = elem.get("class", "").split()
                 if "tcy" not in classes and class_style.get("text-combine-upright") != "all":
                     continue
 
@@ -3482,12 +3513,15 @@ class KFX_EPUB_Properties(object):
                     # word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
                     # 電書協 utility class（不在 css_rules 中）要保留，例如字級。
                     kept = [c for c in classes if class_selector(c) not in self.css_rules]
-                    span.set("class", " ".join(kept + ["tcy"]))
+                    elem.set("class", " ".join(kept + ["tcy"]))
                 elif "tcy" not in classes:
                     # 保留原本的樣式 class，再補上 tcy；consolidate 會據此避免合併。
-                    span.set("class", " ".join(classes + ["tcy"]))
+                    elem.set("class", " ".join(classes + ["tcy"]))
 
-                self.split_tcy_span(span)
+                # 其他 ruby 已不使用 rb；帶 tcy 的 rb 改成 span，讓 rb 完全消失。
+                if elem.tag == "rb":
+                    elem.tag = "span"
+                self.split_tcy_span(elem)
 
     # 縦中横以 2 個符號為一組；KFX 有時會給出 4 個字元一組，需拆回 2+2。
     def split_tcy_span(self, span):

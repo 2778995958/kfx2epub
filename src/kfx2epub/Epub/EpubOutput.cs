@@ -409,6 +409,8 @@ public partial class KfxEpub
         SaveBookParts();
         CreateCssFiles();
         EnsureLinkedCssFiles();
+        EpubDiagnostics.RecordCssFiles(this);
+        EpubDiagnostics.RecordFinal(this);
         CreateOpf();
         return ZipEpub();
     }
@@ -1001,14 +1003,16 @@ public partial class KfxEpub
         else if (!body.Has("class")) body.Set("class", "p-text");
     }
 
-    // 最後還留在生成 class 裡的宣告，直接寫進元素的 style；
-    // 這樣就不會再產生 style-kfx.css，也不用靠 class 名稱去引用。
-    // 有 ::first-line 等選擇器附掛規則的 class 例外保留。
+    // 奥付與扉頁的殘餘宣告直接寫進元素的 style，避免為了少數頁面產生 style-kfx.css。
+    // 本文保留生成 class，統一寫入 style-kfx.css，之後才能統計並比對電書協 utility class。
+    // 有 ::first-line 等選擇器附掛規則的 class 一律例外保留。
     public void InlineRemainingGeneratedStyles()
     {
+        EpubDiagnostics.RecordGeneratedRules(CssRules, ExtraCssRules, MediaQueries);
         foreach (var bookPart in BookParts)
         {
             if (bookPart.IsNav || bookPart.IsFxl) continue;
+            if (!InlineRemainingOnPage(bookPart)) continue;
             foreach (var elem in bookPart.Body().DescendantsAndSelf())
             {
                 var classNames = (elem.Get("class", "") ?? "")
@@ -1018,15 +1022,22 @@ public partial class KfxEpub
                     .ToList();
                 if (classNames.Count == 0) continue;
 
-                var merged = new Style(elem.Get("style", ""));
+                var beforeStyle = elem.Get("style", "") ?? "";
+                var merged = new Style(beforeStyle);
+                var mergedDecls = new List<string>();
                 foreach (var className in classNames)
                 {
                     var selector = ClassSelector(className);
-                    if (CssRules.TryGetValue(selector, out var rule)) merged.Update(rule, replace: true);
+                    if (CssRules.TryGetValue(selector, out var rule))
+                    {
+                        merged.Update(rule, replace: true);
+                        mergedDecls.Add(rule.ToString());
+                    }
+
                     if (ExtraCssRules.TryGetValue(selector, out var extra))
                     {
                         merged.Update(new Style(extra), replace: true);
-                        ExtraCssRules.Remove(selector);
+                        mergedDecls.Add(extra);
                     }
 
                     RemoveClass(elem, className);
@@ -1043,8 +1054,27 @@ public partial class KfxEpub
                 foreach (var (key, value) in others) elem.Attributes[key] = value;
                 if (classValue is not null) elem.Set("class", classValue);
                 elem.Set("style", styleValue);
+                EpubDiagnostics.InlineEvent(bookPart.Filename, elem, classNames, beforeStyle,
+                    string.Join("; ", mergedDecls), styleValue);
             }
         }
+
+        // 同一個 utility class 可能被多個元素共用，逐一內聯後才能移除規則；
+        // 仍留在本文／nav／fixed-layout 頁面的 class 要保留給 style-kfx.css。
+        var usedClasses = UsedHtmlClasses();
+        foreach (var selector in ExtraCssRules.Keys.ToList())
+        {
+            var match = Regex.Match(selector, @"^\.([A-Za-z0-9_-]+)");
+            if (match.Success && usedClasses.Contains(match.Groups[1].Value)) continue;
+            ExtraCssRules.Remove(selector);
+        }
+    }
+
+    private static bool InlineRemainingOnPage(BookPart bookPart)
+    {
+        var frontmatterPrefix = FrontmatterTextFilepath[..FrontmatterTextFilepath.IndexOf("%s", StringComparison.Ordinal)];
+        return bookPart.Filename == ColophonFilepath ||
+               bookPart.Filename.StartsWith(frontmatterPrefix, StringComparison.Ordinal);
     }
 
     // 在產生 CSS 之前先補上頁型 class，讓出版社 CSS（style-kadokawa.css 等）能命中，
@@ -1061,9 +1091,12 @@ public partial class KfxEpub
             var body = bookPart.Body();
             if (bookPart.IsFxl || ShouldUseFixedLayoutSvg(bookPart, body) || IsImageOnlyBody(body)) continue;
 
+            var beforeClass = body.Get("class", "") ?? "";
             var pageClass = bookPart.Filename == TocFilepath ? "p-toc"
                 : bookPart.Filename == ColophonFilepath ? "p-colophon"
                 : "p-text";
+            string removedClass = null;
+            var reason = publisherCss ? "publisher-default" : "default";
             if (publisherCss && pageClass != "p-toc")
             {
                 var spacingClass = FindBodySpacingClass(body);
@@ -1072,21 +1105,29 @@ public partial class KfxEpub
                     if (pageClass == "p-colophon")
                     {
                         RemoveClass(body, spacingClass);
+                        removedClass = spacingClass;
+                        reason = "publisher-colophon";
                     }
                     else if (HasCenterTextAlign(body))
                     {
                         pageClass = "p-titlepage";
                         RemoveClass(body, spacingClass);
+                        removedClass = spacingClass;
+                        reason = "publisher-center-text";
                     }
                     else if (spacingClass == colophonSpacingClass)
                     {
                         pageClass = "p-colophon2";
                         RemoveClass(body, spacingClass);
+                        removedClass = spacingClass;
+                        reason = "publisher-same-spacing-as-colophon";
                     }
                 }
             }
 
             AddClass(body, pageClass);
+            EpubDiagnostics.PageTypeEvent(bookPart.Filename, beforeClass, body.Get("class", "") ?? "",
+                removedClass, pageClass, publisherCss, reason);
         }
     }
 
@@ -1400,6 +1441,7 @@ public partial class KfxEpub
         foreach (var e in body.Descendants().Where(n => n.IsLocal("span") && n.Attributes.Count == 0).ToList())
         {
             e.Name = "temporary-tag";
+            e.Namespace = "";
         }
 
         XhtmlUtil.StripTags(body, "temporary-tag");
@@ -1419,6 +1461,7 @@ public partial class KfxEpub
                         parent.IsLocal("p") || parent.IsLocal("td") || parent.IsNs(XmlNamespaces.Idx, "entry"))
                     {
                         e.Name = "temporary-tag";
+                        e.Namespace = "";
                     }
                     else if (parent.IsLocal("body") && string.IsNullOrEmpty(e.Text))
                     {
@@ -1431,6 +1474,7 @@ public partial class KfxEpub
                             (c.Namespace.Length == 0 && allowed.Contains(c.Name)) || c.IsNs(XmlNamespaces.Idx, "entry")) &&
                             e.Children.All(c => string.IsNullOrEmpty(c.Tail));
                         if (ok) e.Name = "temporary-tag";
+                        if (e.Name == "temporary-tag") e.Namespace = "";
                     }
 
                     if (e.Name == "temporary-tag")
@@ -1446,7 +1490,17 @@ public partial class KfxEpub
         }
 
         // 清掉巢狀處理後仍殘留的 temporary-tag。
-        XhtmlUtil.StripTags(body, "temporary-tag");
+        StripTagRepeatedly(body, "temporary-tag");
+    }
+
+    // StripTags 一次走訪在少數巢狀 ruby 結構會漏掉節點，重複執行直到沒有為止。
+    private static void StripTagRepeatedly(XNode parent, string tag)
+    {
+        for (var guard = 0; guard < 20; guard++)
+        {
+            if (!parent.Descendants().Any(n => n.Name == tag)) return;
+            XhtmlUtil.StripTags(parent, tag);
+        }
     }
 
     private static bool AttributesEqual(XNode a, XNode b)
@@ -1599,10 +1653,38 @@ public partial class KfxEpub
 
     public static void HideElement(XNode elem) => elem.Set("hidden", "");
 
+    // EPUB 3 的 toc nav 必須和 spine 的閱讀順序一致（epubcheck NAV-011）。
+    // KFX 的導覽順序有時把目次排在扉頁前，只在輸出 nav 時依 spine 位置穩定排序；
+    // NcxToc 本身不改動，避免影響其他用途。
+    private List<TocEntry> ReadingOrderToc(List<TocEntry> toc)
+    {
+        if (toc.Count < 2) return toc;
+        var items = new List<(TocEntry Entry, int Original, int Key)>();
+        var lastKey = -1;
+        for (var i = 0; i < toc.Count; i++)
+        {
+            var key = SpineIndexOf(toc[i].Target);
+            if (key is null) key = lastKey < 0 ? 0 : lastKey;
+            lastKey = key.Value;
+            items.Add((toc[i], i, key.Value));
+        }
+
+        items.Sort((a, b) => a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.Original.CompareTo(b.Original));
+        return items.Select(p => p.Entry).ToList();
+    }
+
+    private int? SpineIndexOf(string target)
+    {
+        if (string.IsNullOrEmpty(target)) return null;
+        var filename = PathUtil.RemoveUrlFragment(target);
+        var index = BookParts.FindIndex(bp => bp.Filename == filename);
+        return index < 0 ? null : index;
+    }
+
     public void CreateNavList(XNode parent, List<TocEntry> toc, BookPart bookPart)
     {
         var ol = XhtmlUtil.SubElement(parent, "ol");
-        foreach (var entry in toc)
+        foreach (var entry in ReadingOrderToc(toc))
         {
             var li = XhtmlUtil.SubElement(ol, "li");
             var a = XhtmlUtil.SubElement(li, "a");

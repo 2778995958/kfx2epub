@@ -7,6 +7,7 @@ __smoke_output__/
 __smoke_batch_output__/
 __kfx_test_nonexistent_output__/
 dist/
+temp/
 *.epub
 *.kfx
 *.kfx-zip

@@ -368,7 +368,7 @@ public static class XhtmlUtil
         for (var i = 0; i < parent.Children.Count; i++)
         {
             var child = parent.Children[i];
-            if (child.Namespace.Length == 0 && child.Name == tag)
+            if (child.Name == tag)
             {
                 parent.Children.RemoveAt(i);
                 child.Parent = null;

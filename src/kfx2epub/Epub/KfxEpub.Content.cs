@@ -23,6 +23,15 @@ public partial class KfxEpub
         ["$618"] = "footnote", ["$619"] = "endnote", ["$281"] = "footnote"
     };
 
+    // 與 Python 版 BLOCK_ALIGNED_CONTAINER_PROPERTIES 相同；fit-width 的 box-align 容器使用。
+    private static readonly HashSet<string> BlockAlignedContainerProperties = new(StringComparer.Ordinal)
+    {
+        "-kfx-attrib-colspan", "-kfx-attrib-rowspan", "-kfx-box-align", "-kfx-heading-level", "-kfx-layout-hints",
+        "-kfx-table-vertical-align", "box-sizing", "float", "margin-left", "margin-right", "margin-top",
+        "margin-bottom", "overflow", "page-break-after", "page-break-before", "page-break-inside",
+        "text-indent", "transform", "transform-origin"
+    };
+
     public void ProcessReadingOrder()
     {
         var usedSections = new HashSet<string>();
@@ -476,7 +485,41 @@ public partial class KfxEpub
         content.Pop("$663");
         content.Pop("$436");
         content.Pop("$622");
-        content.Pop("$615");
+
+        if (content.Pop("$615").ToStr() is { } classification)
+        {
+            if (ClassificationEpubType.TryGetValue(classification, out var epubType))
+            {
+                if (contentElem.IsLocal("div") && !GenerateEpub2)
+                {
+                    contentElem.Name = "aside";
+                    AddStyle(contentElem, new Style(new Dictionary<string, string>
+                    {
+                        ["-kfx-attrib-epub-type"] = epubType
+                    }));
+                }
+            }
+            else if (classification == "$688")
+            {
+                if (!GenerateEpub2) contentElem.Set("role", "math");
+            }
+            else if (classification == "$689")
+            {
+                // 沒有需要輸出的語意。
+            }
+            else if (classification == "$453")
+            {
+                if (contentElem.IsLocal("div") && contentElem.Parent?.IsLocal("table") == true)
+                {
+                    contentElem.Name = "caption";
+                }
+            }
+            else
+            {
+                Log.Warning($"{ContextText} content has classification: {classification}");
+            }
+        }
+
         content.Pop("$475");
 
         if (locationId is not null)
@@ -744,7 +787,83 @@ public partial class KfxEpub
             fitWidth = false;
         }
 
-        if (fitWidth && contentElem.IsLocal("div")) contentStyle.Set("display", "inline-block");
+        if (fitWidth)
+        {
+            if (contentStyle.Get("float") is null)
+            {
+                if (contentElem.IsLocal("div") || contentElem.IsLocal("ol") || contentElem.IsLocal("ul"))
+                {
+                    contentStyle.Set("display", "inline-block");
+                }
+                else if (contentElem.IsLocal("table"))
+                {
+                    contentStyle.Set("display", "inline-table");
+                }
+                else
+                {
+                    Log.Warning($"{ContextText} fit-width 用於非預期元素：{contentElem.Name}");
+                }
+            }
+
+            // 圖片寬度放在子元素時，把百分比寬度提升到容器，圖片本身改成 100%。
+            if (!contentStyle.ContainsKey("width"))
+            {
+                XNode widthElem = null;
+                var childElem = contentElem;
+                while (true)
+                {
+                    if (GetStyle(childElem).ContainsKey("width"))
+                    {
+                        if (widthElem is not null)
+                        {
+                            widthElem = null;
+                            break;
+                        }
+
+                        widthElem = childElem;
+                    }
+
+                    if (childElem.Children.Count > 1)
+                    {
+                        widthElem = null;
+                        break;
+                    }
+
+                    if (childElem.Children.Count == 0 || childElem.IsLocal("audio") ||
+                        childElem.IsLocal("video") || childElem.IsNs(XmlNamespaces.Svg, "svg"))
+                    {
+                        break;
+                    }
+
+                    childElem = childElem.Children[0];
+                }
+
+                if (widthElem is not null &&
+                    (widthElem.IsLocal("audio") || widthElem.IsLocal("img") || widthElem.IsLocal("video") ||
+                     widthElem.IsNs(XmlNamespaces.Svg, "svg")))
+                {
+                    var childStyle = GetStyle(widthElem);
+                    if (childStyle.Get("width")?.EndsWith("%", StringComparison.Ordinal) == true)
+                    {
+                        contentStyle.Set("width", childStyle.Pop("width"));
+                        childStyle.Set("width", "100%");
+                        SetStyle(widthElem, childStyle);
+                    }
+                }
+            }
+
+            if (contentStyle.ContainsKey("-kfx-box-align"))
+            {
+                var (container, containerStyle) = CreateContainer(contentElem, contentStyle, "div",
+                    BlockAlignedContainerProperties);
+                containerStyle.Set("text-align", containerStyle.Pop("-kfx-box-align"));
+                FixVerticalAlignProperties(contentElem, contentStyle);
+                SetStyle(contentElem, contentStyle);
+                contentElem = container;
+                contentStyle = containerStyle;
+            }
+        }
+
         if (contentStyle.Get("-kfx-box-align") is string boxAlign)
         {
             contentStyle.Pop("-kfx-box-align");

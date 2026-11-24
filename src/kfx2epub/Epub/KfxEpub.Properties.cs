@@ -212,6 +212,12 @@ public partial class KfxEpub
             var propertyName = PropertyData.Properties.TryGetValue(name, out var info)
                 ? info.Name
                 : name.Replace('_', '-');
+            if (propertyName == "position" && converted is "oeb-page-foot" or "oeb-page-head")
+            {
+                if (!GenerateEpub2) continue;
+                propertyName = "display";
+            }
+
             dict[propertyName] = converted;
         }
 
@@ -741,6 +747,7 @@ public partial class KfxEpub
     public void CreateCssFiles()
     {
         PruneUnusedCssRules();
+        EpubDiagnostics.RecordKeptRules(CssRules, ExtraCssRules, MediaQueries);
         var linked = new HashSet<string>();
         foreach (var bookPart in BookParts)
         {
@@ -912,10 +919,12 @@ public partial class KfxEpub
     {
         foreach (var bookPart in BookParts)
         {
-            foreach (var span in bookPart.Body().FindDescendants("span").ToList())
+            var body = bookPart.Body();
+            var candidates = body.FindDescendants("span").Concat(body.FindDescendants("rb")).ToList();
+            foreach (var elem in candidates)
             {
-                var classes = (span.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var classStyle = GeneratedClassStyle(span);
+                var classes = (elem.Get("class", "") ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var classStyle = GeneratedClassStyle(elem);
                 var isTcy = classes.Contains("tcy") || classStyle?.Get("text-combine-upright") == "all";
                 if (!isTcy) continue;
 
@@ -926,15 +935,17 @@ public partial class KfxEpub
                     // word-break 對 2 字元的縦中横沒有作用；bw 的 tcy 也不帶這個屬性。
                     // 電書協 utility class（不在 CssRules 中）要保留，例如字級。
                     var kept = classes.Where(c => !CssRules.ContainsKey(ClassSelector(c))).Append("tcy");
-                    span.Set("class", string.Join(" ", kept));
+                    elem.Set("class", string.Join(" ", kept));
                 }
                 else if (!classes.Contains("tcy"))
                 {
                     // 保留原本的樣式 class，再補上 tcy；ConsolidateHtml 會據此避免合併。
-                    span.Set("class", string.Join(" ", classes.Append("tcy")));
+                    elem.Set("class", string.Join(" ", classes.Append("tcy")));
                 }
 
-                SplitTcySpan(span);
+                // 其他 ruby 已不使用 rb；帶 tcy 的 rb 改成 span，讓 rb 完全消失。
+                if (elem.IsLocal("rb")) elem.Name = "span";
+                SplitTcySpan(elem);
             }
         }
     }
