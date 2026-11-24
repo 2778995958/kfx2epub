@@ -41,7 +41,7 @@ public partial class KfxEpub
             {
                 if (anchorValue is not IonStruct anchor) continue;
                 CheckFragmentName(anchor, "$266", anchorName);
-                if (anchor.TryGetValue("$186", out var uriValue))
+                if (anchor.Pop("$186") is { } uriValue)
                 {
                     var uri = uriValue.ToStr() ?? "";
                     if (uri is "http://" or "https://") uri = "";

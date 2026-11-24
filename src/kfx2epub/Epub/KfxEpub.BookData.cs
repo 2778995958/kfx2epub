@@ -81,6 +81,11 @@ public partial class KfxEpub
             }
 
             if (!map.ContainsKey(id)) map[id] = ReplaceIonData(fragment.Value);
+            else if (fragment.Ftype == "$597" && IonDataEqual(map[id], ReplaceIonData(fragment.Value)))
+            {
+                // 有些 KFX-ZIP 會把同一個容器打包兩份；auxiliary_data 內容相同時保留第一份。
+                Log.Info($"忽略重複的 {fragment.Ftype} fragment：{id}");
+            }
             else Log.Error($"書籍包含多個 {fragment.Ftype} fragment");
         }
 
@@ -123,6 +128,47 @@ public partial class KfxEpub
                 return value;
             default:
                 return value;
+        }
+    }
+
+    // 只用來判斷重複的 auxiliary_data 是否內容相同；不做完整 Ion 正規化。
+    private static bool IonDataEqual(object left, object right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left is null || right is null) return false;
+
+        switch (left)
+        {
+            case IonStruct a when right is IonStruct b:
+                if (a.Count != b.Count) return false;
+                using (var ea = a.GetEnumerator())
+                using (var eb = b.GetEnumerator())
+                {
+                    while (ea.MoveNext() && eb.MoveNext())
+                    {
+                        if (ea.Current.Key != eb.Current.Key) return false;
+                        if (!IonDataEqual(ea.Current.Value, eb.Current.Value)) return false;
+                    }
+                }
+
+                return true;
+            case IonAnnotation a when right is IonAnnotation b:
+                return a.Annotations.Select(x => x.Value).SequenceEqual(b.Annotations.Select(x => x.Value))
+                       && IonDataEqual(a.Value, b.Value);
+            case IonBLOB a when right is IonBLOB b:
+                return a.Data.AsSpan().SequenceEqual(b.Data);
+            case List<object> a when right is List<object> b:
+                if (a.Count != b.Count) return false;
+                for (var i = 0; i < a.Count; i++)
+                {
+                    if (!IonDataEqual(a[i], b[i])) return false;
+                }
+
+                return true;
+            case IonSymbol a when right is IonSymbol b:
+                return a.Value == b.Value;
+            default:
+                return left.Equals(right);
         }
     }
 
