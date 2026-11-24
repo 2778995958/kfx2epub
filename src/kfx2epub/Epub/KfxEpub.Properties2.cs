@@ -741,9 +741,10 @@ public partial class KfxEpub
     }
 
     // 電書協樣式表中實際存在的 utility class 名稱（啟動時由內嵌 CSS 解析）。
-    private static HashSet<string> _utilityClassNames;
+    // 平行轉換時多個執行緒會同時取用，交給 Lazy<T> 確保只載入一次。
+    private static readonly Lazy<HashSet<string>> _utilityClassNames = new(LoadUtilityClassNames);
 
-    private static HashSet<string> UtilityClassNames => _utilityClassNames ??= LoadUtilityClassNames();
+    private static HashSet<string> UtilityClassNames => _utilityClassNames.Value;
 
     private static HashSet<string> LoadUtilityClassNames()
     {

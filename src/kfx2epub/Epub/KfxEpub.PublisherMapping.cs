@@ -17,9 +17,10 @@ public partial class KfxEpub
     private sealed record PublisherRule(
         string PageType, string ParentClass, string Tag, string ClassName, Style Declarations, int Order);
 
-    private static List<PublisherRule> _publisherRules;
+    // 平行轉換時多個執行緒會同時取用，交給 Lazy<T> 確保只載入一次。
+    private static readonly Lazy<List<PublisherRule>> _publisherRules = new(LoadPublisherRules);
 
-    private static List<PublisherRule> PublisherRules => _publisherRules ??= LoadPublisherRules();
+    private static List<PublisherRule> PublisherRules => _publisherRules.Value;
 
     // 版面骨架由頁型 class 負責，不作为比對對象。
     private static readonly HashSet<string> PublisherStructuralClasses = new(StringComparer.Ordinal)
