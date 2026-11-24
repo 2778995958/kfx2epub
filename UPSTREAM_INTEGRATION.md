@@ -409,25 +409,7 @@ XHTML XML declaration 只有一行
 - 分開報告 ZIP timestamp；
 - 再比較 XML 結構與文字內容。
 
-## 9. Windows portable EXE
-
-建置時必須確認：
-
-```text
-convert_kfx2epub.exe
-kfxlib/
-kfxlib/styles/
-```
-
-目前 spec 的原則是：
-
-```python
-excludes=["kfxlib"]
-```
-
-也就是 EXE 與完整外部 `kfxlib/` 一起發佈。重新建置後要檢查 portable 目錄中的 `version.py`、新版 pypdf 檔案與 `styles/` 是否都是目前版本，不要只相信既有 `dist/` 產物。
-
-## 10. 建議的下次整合順序
+## 9. 建議的下次整合順序
 
 1. 記錄新上游版本與目前 HEAD。
 2. 以 `c7e82b0` 或最近一次確認過的共同基準做三方 diff。
@@ -438,10 +420,10 @@ excludes=["kfxlib"]
 7. 檢查 `force_cover`、圖片命名、CSS、vertical writing、comic spread 與 XML header。
 8. 執行 compile、import、smoke test、批次 KFX 回歸測試。
 9. 以隔離輸出目錄比較 EPUB，不覆蓋原始測試輸出。
-10. 檢查 `git diff --check`、`git status` 與 portable build 內容。
+10. 檢查 `git diff --check` 與 `git status`。
 11. 確認 `.gitignore` 沒有把必要的 source 或 `styles/` 排除，再建立 commit。
 
-## 11. 本次整合紀錄
+## 10. 本次整合紀錄
 
 本次上游來源：
 
@@ -472,6 +454,5 @@ c7e82b0
 - vertical writing、頁碼清理與 comic spread；
 - `force_cover` 的 `cover-image`；
 - 單檔/批次 CLI、非法檔名字元全形化與 `dupnameN`；
-- Windows portable EXE 與外部 `kfxlib/`。
 
 本次比對 10 本 EPUB 後，entry 名稱、順序、CSS、圖片、字型與書籍語意內容均無實質變更；發現的重複 XML declaration 已在 `kfxlib/epub_output.py` 修正。

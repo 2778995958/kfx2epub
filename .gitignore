@@ -5,7 +5,6 @@ archived_epub*/
 noshare/
 __smoke_output__/
 __smoke_batch_output__/
-__exe_test_output__/
 __kfx_test_nonexistent_output__/
 dist/
 *.epub
@@ -36,6 +35,3 @@ TestResults/
 *.suo
 *.userosscache
 *.sln.docstates
-
-# Keep the portable build spec tracked
-!packaging/windows-exe/*.spec
