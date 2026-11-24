@@ -464,6 +464,15 @@ public partial class KfxEpub
     // KFX 百分比邊距的版面基準寬度；由 10%↔4em、15%↔6em、2.5%↔1em 三組對照推得。
     private const double KfxLayoutWidthEm = 40;
 
+    // 負 text-indent 與同值 padding 合起來才是電書協的 h-indent，不能拆開處理。
+    private bool KeepsHangingIndent(Style style)
+    {
+        var indent = Regex.Match(style.Get("text-indent", "") ?? "", @"^-(\d+(?:\.\d+)?)em$");
+        if (!indent.Success) return false;
+        var padSide = IsVerticalWritingMode(style.Get("writing-mode", _pageWritingMode)) ? "padding-top" : "padding-left";
+        return style.Get(padSide) == indent.Groups[1].Value + "em";
+    }
+
     // padding-top/left 與負 text-indent 同值 → 電書協的 h-indent（方向相依）。
     // KFX 也可能用百分比表示同一件事：margin M% + text-indent -M/(1-M)%。
     private static bool TryMapHangingIndent(Style style, string direction, out string className)
@@ -1182,7 +1191,10 @@ public partial class KfxEpub
                             var val = childStyle.Get(name);
                             if (val is not null)
                             {
-                                if (val == newValue) childStyle.Pop(name);
+                                // 負 text-indent 與同值 padding 是電書協的 h-indent 組合，
+                                // 提升到父元素會讓子元素只剩 padding，所以留在子元素上。
+                                if (val == newValue && !(name == "text-indent" && KeepsHangingIndent(childStyle)))
+                                    childStyle.Pop(name);
                             }
                             else if (style.Get(name) != newValue) childStyle.Set(name, style.Get(name));
                         }
