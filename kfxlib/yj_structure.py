@@ -21,7 +21,7 @@ from .yj_versions import (is_known_aux_metadata, is_known_kcb_data)
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 REPORT_KNOWN_PROBLEMS = None
@@ -122,6 +122,7 @@ NESTED_FRAGMENT_REFERENCES = {
     ("$597", "$538"): "$597",
     ("$597", "$613"): "$597",
     ("$597", "$614"): "$597",
+    ("$597", "$697"): "$597",
     }
 
 
@@ -510,7 +511,7 @@ class BookStructure(object):
                             img_format = "pdf"
                             img_transparent = img_animated = False
                             page_num = resource.get("$564", 0) + 1
-                            img_width, img_height = get_pdf_page_size(image_data, resource_name, page_num)
+                            img_width, img_height = get_pdf_page_size(image_data, resource_name, page_num, pdf_cache=self.pdf_cache)
                         else:
                             with disable_debug_log():
                                 try:
@@ -585,7 +586,7 @@ class BookStructure(object):
                                             resource_name, resource_width, resource_height, location, page_num, img_width, img_height))
 
                                         if DEBUG_PDF_PAGE_SIZE:
-                                            show_pdf_page_boxes(image_data, resource_name, page_num)
+                                            show_pdf_page_boxes(image_data, resource_name, page_num, pdf_cache=self.pdf_cache)
                                 else:
                                     if (img_width and img_height and resource_width and resource_height and
                                             (img_width != resource_width or img_height != resource_height)):
@@ -764,7 +765,7 @@ class BookStructure(object):
             missing |= (next_visits - visited)
 
         for key in sorted(list(missing)):
-            if key.ftype == "$597":
+            if key.ftype == "$597" or (self.is_dictionary and key.ftype == "$417"):
                 log.warning("Referenced fragment is missing from book: %s" % str(key))
             else:
                 log.error("Referenced fragment is missing from book: %s" % str(key))
@@ -796,7 +797,9 @@ class BookStructure(object):
                 referenced_fragments.append(fragment)
             elif (fragment.ftype in CONTAINER_FRAGMENT_TYPES) or (fragment.fid == fragment.ftype):
                 log.error("Unexpected root fragment: %s" % str(fragment))
-            elif fragment.ftype == "$597" and (self.is_sample or self.is_dictionary):
+            elif fragment.ftype == "$597" and self.is_dictionary:
+                referenced_fragments.append(fragment)
+            elif fragment.ftype == "$597" and self.is_sample:
                 pass
             elif not ignore_extra:
                 unreferenced_fragments.append(fragment)

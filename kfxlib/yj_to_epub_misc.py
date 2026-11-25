@@ -14,7 +14,7 @@ from .yj_versions import KNOWN_SUPPORTED_FEATURES
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 DEVICE_SCREEN_NARROW_PX = 1200
@@ -488,6 +488,67 @@ class KFX_EPUB_Misc(object):
         origin = "%s %s" % (vals.pop("$59"), vals.pop("$58"))
         self.check_empty(vals, "transform_origin")
         return origin
+
+    def process_dictionary_rules(self):
+
+        self.dictionary_rules = {}
+        if self.dictionary_aux_data_id is not None:
+            dictionary_aux_data = self.book_data.get("$597", {}).get(self.dictionary_aux_data_id, None)
+            if dictionary_aux_data is not None:
+                for md in dictionary_aux_data["$258"]:
+                    if md["$492"] == "yj.dictionary.inflection_rules":
+                        try:
+                            dictionary_rule_symtab = LocalSymbolTable(context="dictionary inflection rules", ignore_undef=True)
+
+                            dictionary_rule_set = (IonText(symtab=dictionary_rule_symtab).
+                                                   deserialize_single_value(bytes(md["$307"]), import_symbols=None))
+
+                            for rule in dictionary_rule_set:
+                                self.dictionary_rules[rule["id"]] = rule["rule"]
+                        except Exception as e:
+                            log.error("Exception while parsing dictionary inflection rules: %s" % repr(e))
+                log.info("Parsed %d dictionary inflection rules" % len(self.dictionary_rules))
+            else:
+                log.warning("yj.dictionary auxiliary_data %s is missing" % self.dictionary_aux_data_id)
+
+    def unapply_dictionary_rule(self, word, rule):
+        for instr in reversed(rule.split(";")):
+            if instr:
+                m = re.match(r"^([0-9]+)(.)(.+)$", instr)
+                if not m:
+                    log.error("Unexpected dictionary rule instruction '%s' in '%s'" % (instr, rule))
+                    break
+
+                offset = int(m.group(1))
+                cmd = m.group(2)
+                text = m.group(3)
+
+                end_offset_pos = len(word) - offset
+                txt_len = len(text)
+
+                if cmd == "-":
+                    word = word[:end_offset_pos] + text + word[end_offset_pos:]
+                elif cmd == "+":
+                    cut = word[end_offset_pos-txt_len:end_offset_pos]
+                    if cut != text:
+                        log.error("Dictionary instruction '%s' did not match word '%s' in '%s'" % (instr, word, rule))
+                        break
+
+                    word = word[:end_offset_pos-len(text)] + word[end_offset_pos:]
+                elif cmd == "/":
+                    word = word[:offset] + text + word[offset:]
+                elif cmd == "*":
+                    cut = word[offset:offset+txt_len]
+                    if cut != text:
+                        log.error("Dictionary instruction '%s' did not match word '%s' in '%s'" % (instr, word, rule))
+                        break
+
+                    word = word[:offset] + word[offset+txt_len:]
+                else:
+                    log.error("Unexpected dictionary rule command '%s' in '%s'" % (cmd, rule))
+                    break
+
+        return word
 
     def process_plugin(self, resource_name, alt_text, content_elem, book_part, is_html=False):
         res = self.process_external_resource(resource_name, save=False, is_plugin=True)

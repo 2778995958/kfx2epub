@@ -6,6 +6,7 @@ import gzip
 import hashlib
 import html
 import io
+import itertools
 import json
 import locale
 import logging
@@ -32,7 +33,7 @@ except ImportError:
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 MAX_TEMPDIR_REMOVAL_TRIES = 60
@@ -140,6 +141,17 @@ def list_keys(a_dict):
     return list_symbols(a_dict.keys())
 
 
+def list_numbers(numbers):
+    ranges = []
+    for key, group in itertools.groupby(enumerate(sorted(set(numbers))), lambda pair: pair[1] - pair[0]):
+        group_list = list(group)
+        start = group_list[0][1]
+        end = group_list[-1][1]
+        ranges.append(("%d" % start) if start == end else ("%d-%d" % (start, end)))
+
+    return ", ".join(ranges)
+
+
 def list_symbols(a_iter):
     return ", ".join(sorted(unicode_list(a_iter)))
 
@@ -199,6 +211,10 @@ def json_deserialize(data, ordered=True):
         return json.loads(data, object_pairs_hook=collections.OrderedDict)
 
     return json.loads(data)
+
+
+def json_deserialize_file(filename, ordered=True):
+    return json_deserialize(file_read_utf8(filename), ordered)
 
 
 def gzipit(data):
@@ -646,7 +662,7 @@ def sha256(data):
 
 def plugin_modules_path():
     if __file__ == "<calibre Plugin Loader>":
-        return sys.path[0] + "/kfxlib/calibre-plugin-modules"
+        return os.path.join(sys.path[0], "kfxlib", "calibre-plugin-modules")
 
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "calibre-plugin-modules")
 

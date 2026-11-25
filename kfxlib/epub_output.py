@@ -23,7 +23,7 @@ from .utilities import (get_url_filename, make_unique_name, urlabspath, urlrelpa
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 GENERATE_EPUB2_NCX_DOCTYPE = False
@@ -1479,8 +1479,12 @@ class EPUB_Output(object):
 
             if not book_part.omit:
                 document = etree.ElementTree(book_part.html)
-                doctype = b"<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.1//EN' 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd'>"
+                if self.generate_epub2:
+                    doctype = b"<!DOCTYPE html PUBLIC '-//W3C//DTD XHTML 1.1//EN' 'http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd'>"
+                else:
+                    doctype = b"<!DOCTYPE html>"
 
+                # format_xhtml_document_header() adds the declaration explicitly.
                 html_str = etree.tostring(document, encoding="utf-8", doctype=doctype, xml_declaration=False)
 
                 if not self.generate_epub2:
@@ -2041,8 +2045,7 @@ class EPUB_Output(object):
 
                 itemref_properties = manifest_entry.opf_properties & SPINE_ITEMREF_PROPERTIES
 
-                if (tweaks.get("kfx_input_add_comic_spread_center", True) and self.is_comic
-                        and has_page_spread and not itemref_properties):
+                if self.is_comic and has_page_spread and not itemref_properties:
                     itemref_properties.add("rendition:page-spread-center")
 
                 if len(itemref_properties) and not self.generate_epub2:

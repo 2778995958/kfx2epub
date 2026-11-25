@@ -9,7 +9,7 @@ from .epub_output import (EPUB_Output)
 
 from .ion import (ion_type, IonAnnotation, IonList, IonSExp, IonString, IonStruct, IonSymbol)
 from .message_logging import log
-from .utilities import (check_empty, list_symbols, UUID_MATCH_RE)
+from .utilities import (check_empty, list_numbers, list_symbols, UUID_MATCH_RE)
 from .yj_structure import SYM_TYPE
 from .yj_to_epub_content import KFX_EPUB_Content
 from .yj_to_epub_illustrated_layout import KFX_EPUB_Illustrated_Layout
@@ -22,7 +22,7 @@ from .yj_to_epub_resources import KFX_EPUB_Resources
 
 
 __license__ = "GPL v3"
-__copyright__ = "2016-2025, John Howell <jhowell@acm.org>"
+__copyright__ = "2016-2026, John Howell <jhowell@acm.org>"
 
 
 RETAIN_USED_FRAGMENTS = False
@@ -82,6 +82,7 @@ class KFX_EPUB(
         self.process_content_features()
         self.process_fonts()
         self.process_document_data()
+        self.process_dictionary_rules()
         self.process_metadata()
 
         self.set_condition_operators()
@@ -173,6 +174,19 @@ class KFX_EPUB(
         self.book_data.pop("$267", None)
 
         self.check_empty(self.book_data, "Book fragments")
+
+        defined_dictionary_rules = set(self.dictionary_rules.keys())
+
+        unused_dictionary_rules = defined_dictionary_rules - self.used_dictionary_rules
+        if unused_dictionary_rules:
+            log.warning("Unused dictionary rules: %s" % list_numbers(unused_dictionary_rules))
+
+        undefined_dictionary_rules = self.used_dictionary_rules - defined_dictionary_rules
+        if undefined_dictionary_rules:
+            log.error("Undefined dictionary inflection rules: %s" % list_numbers(undefined_dictionary_rules))
+
+            if defined_dictionary_rules:
+                log.info("Present dictionary inflection rules: %s" % list_numbers(defined_dictionary_rules))
 
         missing_font_names = self.used_font_names - self.present_font_names
         if missing_font_names:
