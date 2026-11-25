@@ -1,6 +1,8 @@
 import collections
 import copy
+import datetime
 import decimal
+import os
 import re
 
 from .epub_output import (EPUB_Output)
@@ -64,6 +66,7 @@ class KFX_EPUB(
         EPUB_Output.__init__(self, epub2_desired, force_cover, not metadata_only)
 
         self.book = book
+        self.source_modified_time = self.get_source_modified_time(book)
         self.book_symbols = set()
         self.book_data = self.organize_fragments_by_type(book.fragments)
         self.is_kpf = book.kpf_container is not None
@@ -177,6 +180,29 @@ class KFX_EPUB(
 
             if self.present_font_names:
                 log.info("Present referenced font family names: %s" % list_symbols(self.present_font_names))
+
+    @staticmethod
+    def get_source_modified_time(book):
+        """KFX 沒有官方修改時間；採用 zip 內所有檔案最晚的 DOS 時間。"""
+        override = os.environ.get("KFX2EPUB_MODIFIED_TIME")
+        if override:
+            try:
+                return datetime.datetime.strptime(override, "%Y-%m-%dT%H:%M:%SZ")
+            except ValueError:
+                log.warning("Invalid KFX2EPUB_MODIFIED_TIME: %s" % override)
+
+        datafile = getattr(book, "datafile", None)
+        if datafile is not None and datafile.is_zipfile():
+            try:
+                with datafile.as_ZipFile() as zf:
+                    times = [i.date_time for i in zf.infolist()
+                             if not i.is_dir() and i.date_time[0] >= 1980]
+                if times:
+                    return datetime.datetime(*max(times))
+            except Exception:
+                pass
+
+        return datetime.datetime.utcnow()
 
     def decompile_to_epub(self):
         return self.generate_epub()
