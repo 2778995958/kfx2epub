@@ -8,6 +8,8 @@ public sealed class YjBook
 {
     public DataFile DataFile { get; }
     public IonSymbolTable Symtab { get; }
+    // KFX 沒有官方修改時間；採用 zip 內所有檔案最晚的 DOS 時間（naive，無時區）。
+    public DateTime SourceModifiedTime { get; }
     public YjFragmentList Fragments { get; } = new();
     public List<YjContainer> YjContainers { get; } = new();
     public List<DataFile> ContainerDatafiles { get; private set; } = new();
@@ -26,6 +28,33 @@ public sealed class YjBook
     {
         DataFile = new DataFile(file);
         Symtab = new IonSymbolTable("YJ_symbols");
+        SourceModifiedTime = GetSourceModifiedTime(DataFile);
+    }
+
+    private static DateTime GetSourceModifiedTime(DataFile dataFile)
+    {
+        try
+        {
+            if (!dataFile.IsZipFile) return DateTime.UtcNow;
+
+            using var archive = dataFile.AsZipFile();
+            DateTime? latest = null;
+            foreach (var entry in archive.Entries)
+            {
+                if (entry.FullName.EndsWith('/')) continue;
+
+                var time = entry.LastWriteTime.DateTime;
+                if (time.Year < 1980) continue;
+
+                if (latest is null || time > latest) latest = time;
+            }
+
+            return latest ?? DateTime.UtcNow;
+        }
+        catch
+        {
+            return DateTime.UtcNow;
+        }
     }
 
     public void DecodeBook(bool retainYjLocals = false)

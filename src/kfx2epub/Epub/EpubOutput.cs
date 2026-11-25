@@ -1700,12 +1700,14 @@ public partial class KfxEpub
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
             var mimetype = archive.CreateEntry("mimetype", CompressionLevel.NoCompression);
+            ApplySourceTimestamp(mimetype);
             using (var writer = new StreamWriter(mimetype.Open(), new UTF8Encoding(false)))
             {
                 writer.Write("application/epub+zip");
             }
 
             var container = archive.CreateEntry("META-INF/container.xml", CompressionLevel.Optimal);
+            ApplySourceTimestamp(container);
             using (var writer = new StreamWriter(container.Open(), new UTF8Encoding(false)))
             {
                 writer.Write(ContainerXml());
@@ -1714,12 +1716,22 @@ public partial class KfxEpub
             foreach (var (filename, file) in OebpsFiles.OrderBy(p => p.Key, StringComparer.Ordinal))
             {
                 var entry = archive.CreateEntry(OebpsDir + filename, CompressionLevel.Optimal);
+                ApplySourceTimestamp(entry);
                 using var output = entry.Open();
                 output.Write(file.BinaryData, 0, file.BinaryData.Length);
             }
         }
 
         return stream.ToArray();
+    }
+
+    // ZIP 的 DOS 時間沒有時區；使用與 Python 相同的 naive 值，讓兩邊輸出一致。
+    private void ApplySourceTimestamp(ZipArchiveEntry entry)
+    {
+        var time = DateTime.SpecifyKind(SourceModifiedTime, DateTimeKind.Unspecified);
+        entry.LastWriteTime = new DateTimeOffset(time, TimeZoneInfo.Local.GetUtcOffset(time));
+        // 與 Python zipfile 一致：非 0 的外部屬性（0o600 << 16）。
+        entry.ExternalAttributes = 0x1800000;
     }
 
     public string ContainerXml()

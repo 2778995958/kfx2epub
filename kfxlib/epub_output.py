@@ -1894,7 +1894,9 @@ class EPUB_Output(object):
             rights.text = self.rights
 
         if not self.generate_epub2:
-            add_metadata_meta_property("dcterms:modified", datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z")
+            # KFX 沒有官方修改時間；使用來源 zip 內最晚的檔案時間。
+            add_metadata_meta_property("dcterms:modified",
+                                       self.source_modified_time.replace(microsecond=0).isoformat() + "Z")
             add_metadata_meta_property("ebpaj:guide-version", "1.1.4")
             add_metadata_meta_property("dpfj:guide-version", "1.1.4")
 
@@ -2305,15 +2307,24 @@ class EPUB_Output(object):
             if toc_entry.children:
                 self.create_nav_list(li, toc_entry.children, book_part)
 
+    def zip_timestamp_info(self, filename, compress_type=zipfile.ZIP_DEFLATED):
+        # ZIP 的 DOS 時間沒有時區；所有 entry 使用同一個來源時間。
+        info = zipfile.ZipInfo(filename, date_time=self.source_modified_time.timetuple()[:6])
+        info.compress_type = compress_type
+        # 與 C# ZipArchive 相同：不設定外部檔案屬性。
+        info.external_attr = 0
+        return info
+
     def zip_epub(self):
         file = io.BytesIO()
 
         with zipfile.ZipFile(file, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("mimetype", "application/epub+zip".encode("ascii"), compress_type=zipfile.ZIP_STORED)
-            zf.writestr("META-INF/container.xml", self.container_xml())
+            zf.writestr(self.zip_timestamp_info("mimetype", zipfile.ZIP_STORED),
+                        "application/epub+zip".encode("ascii"))
+            zf.writestr(self.zip_timestamp_info("META-INF/container.xml"), self.container_xml())
 
             for filename, oebps_file in sorted(self.oebps_files.items()):
-                zf.writestr(self.OEBPS_DIR + filename, oebps_file.binary_data)
+                zf.writestr(self.zip_timestamp_info(self.OEBPS_DIR + filename), oebps_file.binary_data)
 
         data = file.getvalue()
         file.close()

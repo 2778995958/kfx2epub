@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Kfx2Epub.Core;
 using Kfx2Epub.Kfx;
@@ -22,6 +23,8 @@ public partial class KfxEpub
     public Dictionary<(string Ftype, string Fid), bool> UsedFragments { get; } = new();
     public bool BookHasIllustratedLayoutConditionalPageTemplate { get; set; }
     public string BookSymbolFormat { get; set; }
+    // EPUB 的 dcterms:modified 與輸出 ZIP 的所有 entry 都使用同一個來源時間。
+    public DateTime SourceModifiedTime { get; private set; } = DateTime.UtcNow;
 
     public static readonly Dictionary<string, string> FragmentNameSymbol = new()
     {
@@ -32,10 +35,22 @@ public partial class KfxEpub
     public void InitializeBookData(YjBook book)
     {
         Book = book;
+        SourceModifiedTime = ParseSourceModifiedTimeOverride() ?? book.SourceModifiedTime;
         BookHasIllustratedLayoutConditionalPageTemplate = book.HasIllustratedLayoutConditionalPageTemplate();
         BookData.Clear();
         OrganizeFragmentsByType(book.Fragments);
         DetermineBookSymbolFormat();
+    }
+
+    private static DateTime? ParseSourceModifiedTimeOverride()
+    {
+        var value = Environment.GetEnvironmentVariable("KFX2EPUB_MODIFIED_TIME");
+        if (string.IsNullOrEmpty(value)) return null;
+
+        return DateTime.TryParseExact(value, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed)
+            ? parsed
+            : null;
     }
 
     public Dictionary<string, object> OrganizeFragmentsByType(YjFragmentList fragments)

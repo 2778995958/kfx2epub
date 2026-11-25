@@ -70,8 +70,8 @@ public partial class KfxEpub
         if (!string.IsNullOrEmpty(Subject)) metaOther.Add($"<dc:subject>{XmlEscape(Subject)}</dc:subject>");
         if (!string.IsNullOrEmpty(Rights)) metaOther.Add($"<dc:rights>{XmlEscape(Rights)}</dc:rights>");
 
-        var modifiedTime = Environment.GetEnvironmentVariable("KFX2EPUB_MODIFIED_TIME")
-                           ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss") + "Z";
+        // KFX 沒有官方修改時間；採用來源 zip 內最晚的檔案時間（naive DOS 值）。
+        var modifiedTime = SourceModifiedTime.ToString("yyyy-MM-ddTHH:mm:ss") + "Z";
         metaOther.Add($"<meta property=\"dcterms:modified\">{modifiedTime}</meta>");
         metaOther.Add("<meta property=\"ebpaj:guide-version\">1.1.4</meta>");
         metaOther.Add("<meta property=\"dpfj:guide-version\">1.1.4</meta>");
