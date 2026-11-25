@@ -36,7 +36,7 @@ public sealed class KfxContainer : YjContainer
         var data = DataFile.GetData();
         if (data.Length < MinLength)
         {
-            throw new InvalidOperationException($"KFX 容器太短（{data.Length} bytes）");
+            throw new KfxCorruptException($"KFX 容器太短（{data.Length} bytes）");
         }
 
         var header = new Deserializer(data);
@@ -46,7 +46,7 @@ public sealed class KfxContainer : YjContainer
 
         if (!signature.AsSpan().SequenceEqual(Signature))
         {
-            throw new InvalidOperationException($"KFX 容器 signature 不正確（{IonUtil.BytesToSeparatedHex(signature)}）");
+            throw new KfxCorruptException($"KFX 容器 signature 不正確（{IonUtil.BytesToSeparatedHex(signature)}）");
         }
 
         if (version is not (1 or 2))
@@ -56,7 +56,7 @@ public sealed class KfxContainer : YjContainer
 
         if (headerLen < MinLength)
         {
-            throw new InvalidOperationException($"KFX 容器 header 太短（{headerLen} bytes）");
+            throw new KfxCorruptException($"KFX 容器 header 太短（{headerLen} bytes）");
         }
 
         var containerInfoOffset = header.UnpackUInt32();
@@ -65,7 +65,7 @@ public sealed class KfxContainer : YjContainer
         var containerInfoValue = new IonBinary(Symtab).DeserializeSingleValue(infoData);
         if (containerInfoValue is not IonStruct containerInfo)
         {
-            throw new InvalidOperationException("KFX container info 不是 IonStruct");
+            throw new KfxCorruptException("KFX container info 不是 IonStruct");
         }
 
         ContainerId = containerInfo.Pop("$409", "").ToStr() ?? "";
@@ -125,7 +125,7 @@ public sealed class KfxContainer : YjContainer
                 var entityStart = (long)headerLen + (long)entityOffset;
                 if (entityStart + (long)entityLen > data.Length)
                 {
-                    throw new InvalidOperationException($"KFX 容器資料不足（需要 offset {entityStart + (long)entityLen}）");
+                    throw new KfxCorruptException($"KFX 容器資料不足（需要 offset {entityStart + (long)entityLen}）");
                 }
 
                 Entities.Add(new KfxContainerEntity(Symtab, idIdnum, typeIdnum,
@@ -201,7 +201,7 @@ public sealed class KfxContainerEntity
 
     public YjFragment Deserialize()
     {
-        var data = SerializedData ?? throw new InvalidOperationException("KFX entity 沒有序列化資料");
+        var data = SerializedData ?? throw new KfxCorruptException("KFX entity 沒有序列化資料");
         var entity = new Deserializer(data);
         var signature = entity.Extract(4);
         var version = entity.UnpackUInt16();
@@ -209,7 +209,7 @@ public sealed class KfxContainerEntity
 
         if (!signature.AsSpan().SequenceEqual(Signature))
         {
-            throw new InvalidOperationException($"KFX entity signature 不正確（{IonUtil.BytesToSeparatedHex(signature)}）");
+            throw new KfxCorruptException($"KFX entity signature 不正確（{IonUtil.BytesToSeparatedHex(signature)}）");
         }
 
         if (version != Version)
@@ -219,7 +219,7 @@ public sealed class KfxContainerEntity
 
         if (headerLen < MinLength)
         {
-            throw new InvalidOperationException("KFX entity header 太短");
+            throw new KfxCorruptException("KFX entity header 太短");
         }
 
         var infoData = entity.Extract(upto: (int)headerLen);

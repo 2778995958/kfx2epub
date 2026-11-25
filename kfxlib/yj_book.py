@@ -101,12 +101,13 @@ class YJ_Book(BookStructure, BookPosLoc, BookMetadata, KpfBook):
         self.final_actions()
         return result
 
-    def convert_to_epub(self, epub2_desired=False, force_cover=False, desaturate_notebooks=False, progress_fn=None):
+    def convert_to_epub(self, epub2_desired=False, force_cover=False, desaturate_notebooks=False, progress_fn=None,
+                        reproducible=False):
         from .yj_to_epub import KFX_EPUB
         self.decode_book()
         result = KFX_EPUB(self, epub2_desired=epub2_desired, force_cover=force_cover,
                           desaturate_notebooks=desaturate_notebooks,
-                          progress=make_progress(progress_fn)).decompile_to_epub()
+                          progress=make_progress(progress_fn), reproducible=reproducible).decompile_to_epub()
         self.final_actions()
         return result
 

@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Kfx2Epub.Core;
@@ -272,6 +273,8 @@ public partial class KfxEpub
     public bool Epub2Desired;
     public bool ForceCover;
     public bool WillOutput = true;
+    // --reproducible：缺少 ASIN／BookId 時不得使用隨機 UUID。
+    public bool Reproducible;
 
     public void SetBookType(string bookType)
     {
@@ -371,11 +374,12 @@ public partial class KfxEpub
 
     public byte[] GenerateEpub()
     {
-        Uid = !string.IsNullOrEmpty(Asin) ? Asin : !string.IsNullOrEmpty(BookId) ? BookId : "urn:uuid:" + Guid.NewGuid();
+        Uid = !string.IsNullOrEmpty(Asin) ? Asin : !string.IsNullOrEmpty(BookId) ? BookId : "urn:uuid:" + DeterministicOrRandomUuid();
         if (Authors.Count == 0) Authors = new List<string> { "Unknown" };
         if (string.IsNullOrEmpty(Title)) Title = "Unknown";
         if (IsSample) Title += " - Sample";
 
+        CheckEpubVersion();
         IdentifyCover();
         if (RemoveHtmlCover) DoRemoveHtmlCover();
         if (ForceCover) AddGenericCoverPage();
@@ -1723,6 +1727,78 @@ public partial class KfxEpub
         }
 
         return stream.ToArray();
+    }
+
+    // 與 Python 版一致：要求 EPUB 2 但內容需要 EPUB 3 時，自動改用 EPUB 3，
+    // 避免產出 epubcheck 不通過的檔案。
+    private static readonly HashSet<string> Epub3OnlyElements = new(StringComparer.Ordinal)
+    {
+        "article", "aside", "audio", "bdi", "canvas", "details", "dialog", "embed", "figcaption",
+        "figure", "footer", "header", "main", "mark", "meter", "nav", "picture", "progress", "rt",
+        "ruby", "section", "source", "summary", "template", "time", "track", "video", "wbr"
+    };
+
+    private void CheckEpubVersion()
+    {
+        if (!GenerateEpub2) return;
+
+        if (FixedLayout || AuthorPronunciations.Count > 0 || !string.IsNullOrEmpty(TitlePronunciation))
+        {
+            GenerateEpub2 = false;
+            return;
+        }
+
+        foreach (var file in OebpsFiles.Values)
+        {
+            if (file.Mimetype is "application/octet-stream" or "application/xml" or "text/javascript" or "text/html")
+            {
+                GenerateEpub2 = false;
+                return;
+            }
+        }
+
+        foreach (var bookPart in BookParts)
+        {
+            if (bookPart.IsNav || bookPart.IsFxl)
+            {
+                GenerateEpub2 = false;
+                return;
+            }
+
+            foreach (var element in bookPart.Html.Descendants())
+            {
+                if (Epub3OnlyElements.Contains(element.Name))
+                {
+                    GenerateEpub2 = false;
+                    return;
+                }
+
+                foreach (var key in element.Attributes.Keys)
+                {
+                    if (key.StartsWith("data-", StringComparison.Ordinal) ||
+                        key.StartsWith("{" + XmlNamespaces.Epub + "}", StringComparison.Ordinal))
+                    {
+                        GenerateEpub2 = false;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // --reproducible 時，缺少 ASIN／BookId 不得使用隨機 UUID；
+    // 以書籍 metadata 導出固定 UUID（version 5 形式），同一輸入必得相同值。
+    private string DeterministicOrRandomUuid()
+    {
+        if (!Reproducible) return Guid.NewGuid().ToString();
+
+        var seed = string.Join("|", Asin ?? "", BookId ?? "", Title ?? "", string.Join("&", Authors),
+            Language ?? "");
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(seed));
+        var bytes = hash.AsSpan(0, 16).ToArray();
+        bytes[6] = (byte)((bytes[6] & 0x0F) | 0x50);
+        bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
+        return new Guid(bytes).ToString();
     }
 
     // ZIP 的 DOS 時間沒有時區；使用與 Python 相同的 naive 值，讓兩邊輸出一致。

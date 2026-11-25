@@ -24,18 +24,27 @@ public sealed class YjBook
     public bool IsIllustratedLayout { get; set; }
     public bool IsPdfBackedFixedLayout { get; set; }
 
-    public YjBook(string file)
+    // 供 CLI 使用：容器標頭版本（1 或 2）；PROBE 不需要建構完整 EPUB 流程。
+    public int? KfxVersion { get; private set; }
+    // 解析時遇到 DRM 容器（只有 ignoreDrm 模式會記錄而不拋出）。
+    public bool DrmDetected { get; private set; }
+
+    private static readonly DateTime ReproducibleFallbackTime = new(1980, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+    private readonly bool _reproducible;
+
+    public YjBook(string file, bool reproducible = false)
     {
         DataFile = new DataFile(file);
         Symtab = new IonSymbolTable("YJ_symbols");
+        _reproducible = reproducible;
         SourceModifiedTime = GetSourceModifiedTime(DataFile);
     }
 
-    private static DateTime GetSourceModifiedTime(DataFile dataFile)
+    private DateTime GetSourceModifiedTime(DataFile dataFile)
     {
         try
         {
-            if (!dataFile.IsZipFile) return DateTime.UtcNow;
+            if (!dataFile.IsZipFile) return _reproducible ? ReproducibleFallbackTime : DateTime.UtcNow;
 
             using var archive = dataFile.AsZipFile();
             DateTime? latest = null;
@@ -49,15 +58,15 @@ public sealed class YjBook
                 if (latest is null || time > latest) latest = time;
             }
 
-            return latest ?? DateTime.UtcNow;
+            return latest ?? (_reproducible ? ReproducibleFallbackTime : DateTime.UtcNow);
         }
         catch
         {
-            return DateTime.UtcNow;
+            return _reproducible ? ReproducibleFallbackTime : DateTime.UtcNow;
         }
     }
 
-    public void DecodeBook(bool retainYjLocals = false)
+    public void DecodeBook(bool retainYjLocals = false, bool ignoreDrm = false)
     {
         if (Fragments.Count > 0) return;
 
@@ -66,10 +75,29 @@ public sealed class YjBook
         foreach (var datafile in ContainerDatafiles)
         {
             Log.Info($"Processing container: {datafile.Name}");
-            var container = GetContainer(datafile);
+            YjContainer container;
+            try
+            {
+                container = GetContainer(datafile);
+            }
+            catch (KfxDrmException)
+            {
+                if (!ignoreDrm) throw;
+                // PROBE 仍要回報 drm:true，並盡量讀取其他未受保護容器的 metadata。
+                DrmDetected = true;
+                continue;
+            }
+
             if (container is null) continue;
             container.Deserialize();
             YjContainers.Add(container);
+
+            if (container is KfxContainer kfxContainer &&
+                kfxContainer.ContainerInfo?.Value is IonStruct containerInfo &&
+                containerInfo.TryGetValue("version", out var version))
+            {
+                KfxVersion = Convert.ToInt32(version);
+            }
         }
 
         foreach (var container in YjContainers)
@@ -124,12 +152,12 @@ public sealed class YjBook
         }
         else
         {
-            throw new InvalidOperationException($"未知的主要檔案類型 {DataFile.Ext}。必須是 azw8、ion、kfx、kfx-zip、kpf 或 zip。");
+            throw new KfxFormatException($"未知的主要檔案類型 {DataFile.Ext}。必須是 azw8、ion、kfx、kfx-zip、kpf 或 zip。");
         }
 
         if (ContainerDatafiles.Count == 0)
         {
-            throw new InvalidOperationException("找不到 KFX 容器，這本書不是 KFX 格式。");
+            throw new KfxFormatException("找不到 KFX 容器，這本書不是 KFX 格式。");
         }
 
         ContainerDatafiles.Sort();
@@ -171,16 +199,16 @@ public sealed class YjBook
 
         if (data.Length >= 8 && data.AsSpan(0, 8).SequenceEqual(KfxContainer.DrmSignature))
         {
-            throw new InvalidOperationException($"書籍容器 {datafile.Name} 有 DRM，無法轉換");
+            throw new KfxDrmException($"書籍容器 {datafile.Name} 有 DRM，無法轉換");
         }
 
         if (data.Length >= 0x44 && (data.AsSpan(0x3c, 8).SequenceEqual("BOOKMOBI"u8) ||
                                     data.AsSpan(0x3c, 8).SequenceEqual("RBINCONT"u8)))
         {
-            throw new InvalidOperationException($"檔案格式是 MOBI（不是 KFX）：{datafile.Name}");
+            throw new KfxFormatException($"檔案格式是 MOBI（不是 KFX）：{datafile.Name}");
         }
 
-        throw new InvalidOperationException($"無法判斷 KFX 容器類型：{datafile.Name}（{IonUtil.BytesToSeparatedHex(data.AsSpan(0, Math.Min(8, data.Length)))}）");
+        throw new KfxFormatException($"無法判斷 KFX 容器類型：{datafile.Name}（{IonUtil.BytesToSeparatedHex(data.AsSpan(0, Math.Min(8, data.Length)))}）");
     }
 
     public bool HasIllustratedLayoutConditionalPageTemplate()
