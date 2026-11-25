@@ -4,6 +4,7 @@ import decimal
 import io
 from lxml import etree
 from PIL import (Image, ImageDraw, ImageFont)
+import os
 import posixpath
 import re
 import uuid
@@ -293,11 +294,13 @@ class EPUB_Output(object):
         FIXED_LAYOUT_CSS_FILEPATH = "/style" + FIXED_LAYOUT_CSS_FILEPATH
         LAYOUT_CSS_FILEPATH = "/style" + LAYOUT_CSS_FILEPATH
 
-    def __init__(self, epub2_desired=False, force_cover=False, will_output=True):
+    def __init__(self, epub2_desired=False, force_cover=False, will_output=True, reproducible=False):
         self.epub2_desired = epub2_desired
         self.generate_epub2 = epub2_desired
         self.force_cover = force_cover
         self.will_output = will_output
+        # --reproducible：缺少 ASIN／BookId 時不得使用隨機 UUID。
+        self.reproducible = bool(reproducible) or os.environ.get("KFX2EPUB_REPRODUCIBLE") == "1"
 
         self.oebps_files = {}
         self.book_parts = []
@@ -455,6 +458,10 @@ class EPUB_Output(object):
             self.uid = self.asin
         elif self.book_id:
             self.uid = self.book_id
+        elif self.reproducible:
+            seed = "|".join([self.asin or "", self.book_id or "", self.title or "",
+                             "&".join(self.authors or []), self.language or ""])
+            self.uid = "urn:uuid:" + str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
         else:
             self.uid = "urn:uuid:" + str(uuid.uuid4())
 

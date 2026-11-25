@@ -53,7 +53,7 @@ class KFX_EPUB(
 
     def __init__(
             self, book, epub2_desired=False, force_cover=False, desaturate_notebooks=False,
-            metadata_only=False, progress=None):
+            metadata_only=False, progress=None, reproducible=False):
         decimal.getcontext().prec = 6
         KFX_EPUB_Content.__init__(self)
         KFX_EPUB_Illustrated_Layout.__init__(self)
@@ -63,7 +63,7 @@ class KFX_EPUB(
         KFX_EPUB_Notebook.__init__(self, desaturate_notebooks)
         KFX_EPUB_Properties.__init__(self)
         KFX_EPUB_Resources.__init__(self)
-        EPUB_Output.__init__(self, epub2_desired, force_cover, not metadata_only)
+        EPUB_Output.__init__(self, epub2_desired, force_cover, not metadata_only, reproducible)
 
         self.book = book
         self.source_modified_time = self.get_source_modified_time(book)
@@ -215,6 +215,9 @@ class KFX_EPUB(
                     return datetime.datetime(*max(times))
             except Exception:
                 pass
+
+        if os.environ.get("KFX2EPUB_REPRODUCIBLE") == "1":
+            return datetime.datetime(1980, 1, 1)
 
         return datetime.datetime.utcnow()
 
