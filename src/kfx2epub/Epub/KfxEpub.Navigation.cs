@@ -234,6 +234,8 @@ public partial class KfxEpub
         string sectionName, int? headingLevel)
     {
         var (label, icon, description) = GetRepresentation(navUnit);
+        // 與 Python 版一致：目次標題去除前後空白，空白標題視同沒有標題。
+        label = label?.Trim() ?? "";
         var desc = navUnit.Pop("$154").ToStr();
         if (!string.IsNullOrEmpty(desc)) description = desc.Trim();
 
@@ -312,7 +314,11 @@ public partial class KfxEpub
 
         if (navType != "$798")
         {
-            if (string.IsNullOrEmpty(label) && anchorName is null) ncxToc.AddRange(nestedToc);
+            // 標題只有空白時不建立空連結：有子項就提升一層，沒有子項就略過。
+            if (string.IsNullOrWhiteSpace(label))
+            {
+                if (nestedToc.Count > 0) ncxToc.AddRange(nestedToc);
+            }
             else
             {
                 ncxToc.Add(new TocEntry(label, anchor: anchorName, children: nestedToc, description: description,

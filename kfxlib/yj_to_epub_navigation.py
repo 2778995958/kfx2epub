@@ -268,8 +268,10 @@ class KFX_EPUB_Navigation(object):
             anchor_name = None
 
         if nav_type != "$798":
-            if (not label) and (not anchor_name):
-                ncx_toc.extend(nested_toc)
+            # 標題只有空白時不建立空連結：有子項就提升一層，沒有子項就略過。
+            if not label or not label.strip():
+                if nested_toc:
+                    ncx_toc.extend(nested_toc)
             else:
                 ncx_toc.append(TocEntry(
                     label, anchor=anchor_name, children=nested_toc, description=description,

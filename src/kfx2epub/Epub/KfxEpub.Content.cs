@@ -677,7 +677,7 @@ public partial class KfxEpub
         if (linkTo is not null)
         {
             var (container, containerStyle) = CreateContainer(contentElem, contentStyle, "a",
-                PropertyData.HeritableProperties.Concat(new[] { "-kfx-attrib-colspan", "-kfx-attrib-rowspan",
+                PropertyData.HeritableProperties.Where(n => n != "font-size").Concat(new[] { "-kfx-attrib-colspan", "-kfx-attrib-rowspan",
                     "-kfx-table-vertical-align", "-kfx-box-align", "-kfx-heading-level", "-kfx-layout-hints",
                     "-kfx-link-color", "-kfx-visited-color" }).ToHashSet());
             container.Set("href", AnchorAsUri(linkTo));
@@ -742,7 +742,7 @@ public partial class KfxEpub
                 fitWidth = false;
 
                 FixVerticalAlignProperties(contentElem, contentStyle);
-                var blockProperties = PropertyData.HeritableProperties.Concat(new[]
+                var blockProperties = PropertyData.HeritableProperties.Where(n => n != "font-size").Concat(new[]
                 {
                     "-kfx-attrib-colspan", "-kfx-attrib-rowspan", "-kfx-box-align", "-kfx-heading-level",
                     "-kfx-layout-hints", "-kfx-table-vertical-align", "box-sizing", "float", "margin-left",

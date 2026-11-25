@@ -2297,7 +2297,7 @@ class EPUB_Output(object):
         for toc_entry in self.reading_order_toc(ncx_toc):
             li = etree.SubElement(ol, "li")
             a = etree.SubElement(li, "a")
-            a.text = toc_entry.title or "."
+            a.text = toc_entry.title if toc_entry.title and toc_entry.title.strip() else "."
 
             if toc_entry.target:
                 a.set("href", urlrelpath(toc_entry.target, ref_from=book_part.filename))

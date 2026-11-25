@@ -272,6 +272,24 @@ public partial class KfxEpub
         ["#ff4500"] = "bg-orangered", ["orangered"] = "bg-orangered"
     };
 
+    // 電書協 color-* utility（與 bg-* 同一組色票，但 class 前綴不同）。
+    private static readonly Dictionary<string, string> UtilityTextColors = new(StringComparer.Ordinal)
+    {
+        ["#000000"] = "color-black", ["black"] = "color-black",
+        ["#696969"] = "color-dimgray", ["dimgray"] = "color-dimgray",
+        ["#808080"] = "color-gray", ["gray"] = "color-gray", ["grey"] = "color-gray",
+        ["#a9a9a9"] = "color-darkgray", ["darkgray"] = "color-darkgray", ["darkgrey"] = "color-darkgray",
+        ["#c0c0c0"] = "color-silver", ["silver"] = "color-silver",
+        ["#dcdcdc"] = "color-gainsboro", ["gainsboro"] = "color-gainsboro",
+        ["#ffffff"] = "color-white", ["white"] = "color-white",
+        ["transparent"] = "color-transparent",
+        ["#ff0000"] = "color-red", ["red"] = "color-red",
+        ["#0000ff"] = "color-blue", ["blue"] = "color-blue",
+        ["#00ffff"] = "color-cyan", ["cyan"] = "color-cyan", ["aqua"] = "color-cyan",
+        ["#ff00ff"] = "color-magenta", ["magenta"] = "color-magenta", ["fuchsia"] = "color-magenta",
+        ["#ff4500"] = "color-orangered", ["orangered"] = "color-orangered"
+    };
+
     // 電書協樣式表中實際存在的 utility class（字級百分比、寬高尺寸）。
     private static readonly HashSet<string> UtilityFontPercents = new(StringComparer.Ordinal)
     {
@@ -689,6 +707,16 @@ public partial class KfxEpub
             case "background-color":
                 if (!UtilityBackgroundColors.TryGetValue(lower, out var backgroundClass)) return false;
                 mapping = new UtilityMapping(backgroundClass);
+                return true;
+
+            case "color":
+                if (!UtilityTextColors.TryGetValue(lower, out var textColorClass)) return false;
+                mapping = new UtilityMapping(textColorClass);
+                return true;
+
+            case "text-decoration":
+                if (lower != "line-through") return false;
+                mapping = new UtilityMapping("line-through");
                 return true;
 
             case "letter-spacing":
@@ -1716,6 +1744,24 @@ public partial class KfxEpub
         }
 
         DefaultFontFamily = bestFont;
+
+        // 與 Python 版一致：若內容的 xml:lang 有更精確的變體（例如 ja -> ja-JP），採用出現字數最多者。
+        var bestLanguage = Language;
+        var bestLanguageMerit = 0;
+        if (!string.IsNullOrEmpty(Language))
+        {
+            var languagePattern = new Regex("^" + Regex.Escape(Language) + "(-.+)?$", RegexOptions.IgnoreCase);
+            foreach (var (lang, merit) in languages)
+            {
+                if (merit > bestLanguageMerit && !string.IsNullOrEmpty(lang) && languagePattern.IsMatch(lang))
+                {
+                    bestLanguage = lang;
+                    bestLanguageMerit = merit;
+                }
+            }
+
+            Language = bestLanguage;
+        }
     }
 
     public void SetHtmlDefaults()

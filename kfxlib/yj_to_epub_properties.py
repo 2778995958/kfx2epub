@@ -343,6 +343,22 @@ UTILITY_BACKGROUND_COLORS = {
     "#ff4500": "bg-orangered", "orangered": "bg-orangered",
     }
 
+UTILITY_TEXT_COLORS = {
+    "#000000": "color-black", "black": "color-black",
+    "#696969": "color-dimgray", "dimgray": "color-dimgray",
+    "#808080": "color-gray", "gray": "color-gray", "grey": "color-gray",
+    "#a9a9a9": "color-darkgray", "darkgray": "color-darkgray", "darkgrey": "color-darkgray",
+    "#c0c0c0": "color-silver", "silver": "color-silver",
+    "#dcdcdc": "color-gainsboro", "gainsboro": "color-gainsboro",
+    "#ffffff": "color-white", "white": "color-white",
+    "transparent": "color-transparent",
+    "#ff0000": "color-red", "red": "color-red",
+    "#0000ff": "color-blue", "blue": "color-blue",
+    "#00ffff": "color-cyan", "cyan": "color-cyan", "aqua": "color-cyan",
+    "#ff00ff": "color-magenta", "magenta": "color-magenta", "fuchsia": "color-magenta",
+    "#ff4500": "color-orangered", "orangered": "color-orangered",
+    }
+
 UTILITY_BOX_EM_SIZES = {
     "0em25", "0em50", "0em75", "1em", "1em25", "1em50", "1em75", "2em", "2em50",
     "3em", "4em", "5em", "5em25", "6em", "7em", "8em", "8em75", "9em", "10em",
@@ -2363,6 +2379,15 @@ class KFX_EPUB_Properties(object):
         if name == "background-color":
             utility_class = UTILITY_BACKGROUND_COLORS.get(value)
             return (utility_class, None) if utility_class else None
+
+        if name == "color":
+            utility_class = UTILITY_TEXT_COLORS.get(value)
+            return (utility_class, None) if utility_class else None
+
+        if name == "text-decoration":
+            if value != "line-through":
+                return None
+            return "line-through", None
 
         if name == "letter-spacing":
             match = re.fullmatch(r"(\d+(?:\.\d+)?)em", value)

@@ -40,10 +40,10 @@ public partial class KfxEpub
         var usedPrefixes = new HashSet<string>();
         var metaLines = new List<string>();
 
-        metaLines.Add($"<dc:title id=\"title\">{Escape(Title)}</dc:title>");
+        metaLines.Add($"<dc:title id=\"title\">{XmlEscape(Title)}</dc:title>");
         if (!string.IsNullOrEmpty(TitlePronunciation))
         {
-            metaLines.Add($"<meta refines=\"#title\" property=\"file-as\">{Escape(TitlePronunciation)}</meta>");
+            metaLines.Add($"<meta refines=\"#title\" property=\"file-as\">{XmlEscape(TitlePronunciation)}</meta>");
         }
 
         var creatorBlocks = new List<List<string>>();
@@ -51,24 +51,24 @@ public partial class KfxEpub
         {
             var block = new List<string>();
             var creatorId = $"creator{i + 1:00}";
-            block.Add($"<dc:creator id=\"{creatorId}\">{Escape(authors[i])}</dc:creator>");
+            block.Add($"<dc:creator id=\"{creatorId}\">{XmlEscape(authors[i])}</dc:creator>");
             // marc 是 EPUB 的保留前綴，scheme="marc:relators" 不需要宣告。
             block.Add($"<meta refines=\"#{creatorId}\" property=\"role\" scheme=\"marc:relators\">aut</meta>");
             if (i < AuthorPronunciations.Count)
             {
-                block.Add($"<meta refines=\"#{creatorId}\" property=\"file-as\">{Escape(AuthorPronunciations[i])}</meta>");
+                block.Add($"<meta refines=\"#{creatorId}\" property=\"file-as\">{XmlEscape(AuthorPronunciations[i])}</meta>");
             }
 
             creatorBlocks.Add(block);
         }
 
         var metaOther = new List<string>();
-        if (!string.IsNullOrEmpty(Publisher)) metaOther.Add($"<dc:publisher id=\"publisher\">{Escape(Publisher)}</dc:publisher>");
+        if (!string.IsNullOrEmpty(Publisher)) metaOther.Add($"<dc:publisher id=\"publisher\">{XmlEscape(Publisher)}</dc:publisher>");
         metaOther.Add($"<dc:language>{Escape(string.IsNullOrEmpty(Language) ? "en" : Language)}</dc:language>");
         if (!string.IsNullOrEmpty(Pubdate)) metaOther.Add($"<dc:date>{Escape(Pubdate.Length > 10 ? Pubdate[..10] : Pubdate)}</dc:date>");
-        if (!string.IsNullOrEmpty(DescriptionText)) metaOther.Add($"<dc:description>{Escape(DescriptionText)}</dc:description>");
-        if (!string.IsNullOrEmpty(Subject)) metaOther.Add($"<dc:subject>{Escape(Subject)}</dc:subject>");
-        if (!string.IsNullOrEmpty(Rights)) metaOther.Add($"<dc:rights>{Escape(Rights)}</dc:rights>");
+        if (!string.IsNullOrEmpty(DescriptionText)) metaOther.Add($"<dc:description>{XmlEscape(DescriptionText)}</dc:description>");
+        if (!string.IsNullOrEmpty(Subject)) metaOther.Add($"<dc:subject>{XmlEscape(Subject)}</dc:subject>");
+        if (!string.IsNullOrEmpty(Rights)) metaOther.Add($"<dc:rights>{XmlEscape(Rights)}</dc:rights>");
 
         var modifiedTime = Environment.GetEnvironmentVariable("KFX2EPUB_MODIFIED_TIME")
                            ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss") + "Z";
@@ -168,10 +168,14 @@ public partial class KfxEpub
             foreach (var line in creatorBlocks[i]) metadata.AppendLine(line);
         }
 
-        metadata.AppendLine();
-        metadata.AppendLine("<!-- 出版社名 -->");
         var publisherLine = metaOther.FirstOrDefault(l => l.StartsWith("<dc:publisher"));
-        if (publisherLine is not null) metadata.AppendLine(publisherLine);
+        if (publisherLine is not null)
+        {
+            metadata.AppendLine();
+            metadata.AppendLine("<!-- 出版社名 -->");
+            metadata.AppendLine(publisherLine);
+        }
+
         metadata.AppendLine();
         metadata.AppendLine("<!-- 言語 -->");
         var languageLine = metaOther.FirstOrDefault(l => l.StartsWith("<dc:language"));

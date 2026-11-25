@@ -1688,7 +1688,7 @@ public partial class KfxEpub
         {
             var li = XhtmlUtil.SubElement(ol, "li");
             var a = XhtmlUtil.SubElement(li, "a");
-            a.Text = string.IsNullOrEmpty(entry.Title) ? "." : entry.Title;
+            a.Text = string.IsNullOrWhiteSpace(entry.Title) ? "." : entry.Title;
             if (entry.Target is not null) a.Set("href", PathUtil.UrlRelativePath(entry.Target, bookPart.Filename));
             if (entry.Children.Count > 0) CreateNavList(li, entry.Children, bookPart);
         }
