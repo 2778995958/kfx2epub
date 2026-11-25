@@ -88,7 +88,8 @@ public static class ConvertCommand
             }
             else
             {
-                if (outArg.EndsWith(Path.DirectorySeparatorChar) || Directory.Exists(outArg))
+                if (outArg.EndsWith(Path.DirectorySeparatorChar) ||
+                    outArg.EndsWith(Path.AltDirectorySeparatorChar) || Directory.Exists(outArg))
                 {
                     var directory = Path.GetFullPath(outArg);
                     Directory.CreateDirectory(directory);
