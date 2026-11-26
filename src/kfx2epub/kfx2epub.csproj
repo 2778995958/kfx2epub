@@ -16,4 +16,12 @@
     <EmbeddedResource Include="Styles\*.css" LogicalName="Styles.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 以官方 zlib 原始碼 + /MT 建置；與 Python zlib 產生相同位元流。 -->
+    <None Update="native\zlib1.dll" TargetPath="zlib1.dll"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="native\zlib-LICENSE.txt" TargetPath="zlib-LICENSE.txt"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

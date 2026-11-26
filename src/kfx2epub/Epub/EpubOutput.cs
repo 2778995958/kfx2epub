@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -1700,33 +1699,20 @@ public partial class KfxEpub
 
     public byte[] ZipEpub()
     {
-        using var stream = new MemoryStream();
-        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        // 與 Python zipfile 逐位元一致：mimetype 以 STORED 寫入，
+        // 其餘以 zlib 等級 6 deflate，entry 順序依 ordinal 排序。
+        var items = new List<ZipItem>
         {
-            var mimetype = archive.CreateEntry("mimetype", CompressionLevel.NoCompression);
-            ApplySourceTimestamp(mimetype);
-            using (var writer = new StreamWriter(mimetype.Open(), new UTF8Encoding(false)))
-            {
-                writer.Write("application/epub+zip");
-            }
+            new("mimetype", Encoding.ASCII.GetBytes("application/epub+zip"), true),
+            new("META-INF/container.xml", Encoding.UTF8.GetBytes(ContainerXml()), false)
+        };
 
-            var container = archive.CreateEntry("META-INF/container.xml", CompressionLevel.Optimal);
-            ApplySourceTimestamp(container);
-            using (var writer = new StreamWriter(container.Open(), new UTF8Encoding(false)))
-            {
-                writer.Write(ContainerXml());
-            }
-
-            foreach (var (filename, file) in OebpsFiles.OrderBy(p => p.Key, StringComparer.Ordinal))
-            {
-                var entry = archive.CreateEntry(OebpsDir + filename, CompressionLevel.Optimal);
-                ApplySourceTimestamp(entry);
-                using var output = entry.Open();
-                output.Write(file.BinaryData, 0, file.BinaryData.Length);
-            }
+        foreach (var (filename, file) in OebpsFiles.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            items.Add(new ZipItem(OebpsDir + filename, file.BinaryData, false));
         }
 
-        return stream.ToArray();
+        return ZipWriter.Write(items, SourceModifiedTime);
     }
 
     // 與 Python 版一致：要求 EPUB 2 但內容需要 EPUB 3 時，自動改用 EPUB 3，
@@ -1799,15 +1785,6 @@ public partial class KfxEpub
         bytes[6] = (byte)((bytes[6] & 0x0F) | 0x50);
         bytes[8] = (byte)((bytes[8] & 0x3F) | 0x80);
         return new Guid(bytes).ToString();
-    }
-
-    // ZIP 的 DOS 時間沒有時區；使用與 Python 相同的 naive 值，讓兩邊輸出一致。
-    private void ApplySourceTimestamp(ZipArchiveEntry entry)
-    {
-        var time = DateTime.SpecifyKind(SourceModifiedTime, DateTimeKind.Unspecified);
-        entry.LastWriteTime = new DateTimeOffset(time, TimeZoneInfo.Local.GetUtcOffset(time));
-        // 與 Python zipfile 一致：非 0 的外部屬性（0o600 << 16）。
-        entry.ExternalAttributes = 0x1800000;
     }
 
     public string ContainerXml()
